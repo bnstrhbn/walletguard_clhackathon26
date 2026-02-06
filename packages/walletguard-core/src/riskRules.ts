@@ -49,6 +49,15 @@ export function assessRisk(input: {
   const knownSpenders = options && options.knownSpenders ? options.knownSpenders : [];
   const known = new Set(knownSpenders.map((a) => normalizeAddress(a)));
 
+  if (request.data !== '0x' && decodedCalls.length === 0) {
+    const sig = typeof request.data === 'string' && request.data.length >= 10 ? request.data.slice(0, 10) : '0x????????';
+    flags.push({
+      code: 'UNKNOWN_CALLDATA',
+      severity: 'medium',
+      details: `Transaction calldata could not be decoded (selector=${sig}). Risk assessment is low-confidence.`,
+    });
+  }
+
   for (const call of decodedCalls) {
     if (call.functionName === 'approve') {
       const spender = call.args ? (call.args as Record<string, unknown>).spender : undefined;
@@ -120,6 +129,7 @@ export function assessRisk(input: {
 
   let score = 0;
   for (const f of flags) score += severityWeight(f.severity);
+  if (flags.some((f) => f.code === 'UNKNOWN_CALLDATA')) score += 20;
   if (!simulation.success) score += 20;
   if (score > 100) score = 100;
 

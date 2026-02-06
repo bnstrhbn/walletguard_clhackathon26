@@ -67,8 +67,18 @@ type WalletGuardReport = {
   };
 };
 
+const MAX_INPUT_BYTES = 256_000;
+const MAX_DATA_HEX_CHARS = 200_000;
+const MAX_DECIMAL_STR_CHARS = 80;
+const MAX_METADATA_STR_CHARS = 200;
+const MAX_BLOCKTAG_CHARS = 100;
+
 function isHexString(value: unknown): value is HexString {
-  return typeof value === 'string' && /^0x[0-9a-fA-F]*$/.test(value);
+  return (
+    typeof value === 'string' &&
+    value.length <= MAX_DATA_HEX_CHARS &&
+    /^0x(?:[0-9a-fA-F]{2})*$/.test(value)
+  );
 }
 
 function isAddressString(value: unknown): value is AddressString {
@@ -88,6 +98,7 @@ function parseAnalyzeTxRequest(value: unknown): AnalyzeTxRequest {
   if (!isAddressString(from)) throw new Error('INVALID_REQUEST');
   if (!isAddressString(to)) throw new Error('INVALID_REQUEST');
   if (!isHexString(data)) throw new Error('INVALID_REQUEST');
+  if (data !== '0x' && data.length < 10) throw new Error('INVALID_REQUEST');
 
   const out: AnalyzeTxRequest = {
     chainId,
@@ -96,13 +107,22 @@ function parseAnalyzeTxRequest(value: unknown): AnalyzeTxRequest {
     data,
   };
 
-  if (typeof obj.value === 'string') out.value = obj.value;
-  if (typeof obj.blockTag === 'string') out.blockTag = obj.blockTag;
+  if (typeof obj.value === 'string') {
+    if (obj.value.length > MAX_DECIMAL_STR_CHARS || !/^[0-9]+$/.test(obj.value)) throw new Error('INVALID_REQUEST');
+    out.value = obj.value;
+  }
+  if (typeof obj.blockTag === 'string') {
+    if (obj.blockTag.length > MAX_BLOCKTAG_CHARS) throw new Error('INVALID_REQUEST');
+    out.blockTag = obj.blockTag;
+  }
 
   if (obj.metadata && typeof obj.metadata === 'object') {
     const md = obj.metadata as Record<string, unknown>;
     const wallet = typeof md.wallet === 'string' ? md.wallet : undefined;
     const origin = typeof md.origin === 'string' ? md.origin : undefined;
+
+    if (wallet !== undefined && wallet.length > MAX_METADATA_STR_CHARS) throw new Error('INVALID_REQUEST');
+    if (origin !== undefined && origin.length > MAX_METADATA_STR_CHARS) throw new Error('INVALID_REQUEST');
     if (wallet !== undefined || origin !== undefined) {
       out.metadata = { wallet, origin };
     }
@@ -400,12 +420,15 @@ function simulateTx(runtime: Runtime<Config>, request: AnalyzeTxRequest, config:
 
 function decodeInputJson(input: unknown): unknown {
   if (typeof input === 'string') {
+    if (input.length > MAX_INPUT_BYTES) throw new Error('INPUT_TOO_LARGE');
     return JSON.parse(input);
   }
 
   if (input instanceof Uint8Array) {
+    if (input.length > MAX_INPUT_BYTES) throw new Error('INPUT_TOO_LARGE');
     const decoder = new TextDecoder('utf-8');
     const textBody = decoder.decode(input);
+    if (textBody.length > MAX_INPUT_BYTES) throw new Error('INPUT_TOO_LARGE');
     return JSON.parse(textBody);
   }
 
@@ -434,6 +457,84 @@ function previewInput(input: unknown): string {
   }
 }
 
+function normalizeAddress(addr: AddressString): AddressString {
+  return addr.toLowerCase() as AddressString;
+}
+
+function normalizeHex(hex: HexString): HexString {
+  return hex.toLowerCase() as HexString;
+}
+
+function normalizeDecodedCallArgs(args: Record<string, string | number | boolean> | undefined): Record<string, string | number | boolean> | undefined {
+  if (!args) return undefined;
+  const out: Record<string, string | number | boolean> = {};
+  const keys = Object.keys(args);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const v = (args as any)[k];
+    if (typeof v === 'string') {
+      if (/^0x[0-9a-fA-F]{40}$/.test(v)) {
+        out[k] = v.toLowerCase();
+      } else if (/^0x[0-9a-fA-F]*$/.test(v)) {
+        out[k] = v.toLowerCase();
+      } else {
+        out[k] = v;
+      }
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function requestForCommitment(request: AnalyzeTxRequest): Omit<AnalyzeTxRequest, 'metadata'> {
+  return {
+    chainId: request.chainId,
+    from: normalizeAddress(request.from),
+    to: normalizeAddress(request.to),
+    data: normalizeHex(request.data),
+    value: request.value,
+    blockTag: request.blockTag,
+  };
+}
+
+function simulationForCommitment(simulation: SimulationResult): Omit<SimulationResult, 'gasUsed' | 'errorMessage'> {
+  const decodedCalls = simulation.decodedCalls.map((c) => {
+    return {
+      to: normalizeAddress(c.to),
+      functionSig: c.functionSig ? String(c.functionSig).toLowerCase() : undefined,
+      functionName: c.functionName,
+      args: normalizeDecodedCallArgs(c.args),
+    };
+  });
+
+  const nativeBalanceDeltas = simulation.nativeBalanceDeltas.map((d) => {
+    return { address: normalizeAddress(d.address), deltaWei: d.deltaWei };
+  });
+
+  const tokenBalanceDeltas = simulation.tokenBalanceDeltas.map((d) => {
+    return { token: normalizeAddress(d.token), holder: normalizeAddress(d.holder), delta: d.delta };
+  });
+
+  const logs = simulation.logs
+    ? simulation.logs.map((l) => {
+      return {
+        address: normalizeAddress(l.address),
+        topics: l.topics.map((t) => normalizeHex(t)),
+        data: normalizeHex(l.data),
+      };
+    })
+    : undefined;
+
+  return {
+    success: simulation.success,
+    nativeBalanceDeltas,
+    tokenBalanceDeltas,
+    decodedCalls,
+    logs,
+  };
+}
+
 function buildHandler(config: Config) {
   return (runtime: Runtime<Config>, payload: HTTPPayload): WalletGuardReport => {
     if (payload.input === undefined || payload.input === null) {
@@ -459,8 +560,8 @@ function buildHandler(config: Config) {
     const summary = buildSummary({ risk: risk as unknown as any, simulation }) as WalletGuardReport['summary'];
 
     const reportForHash = {
-      request,
-      simulation,
+      request: requestForCommitment(request),
+      simulation: simulationForCommitment(simulation),
       risk,
       summary,
       provenance: {
@@ -468,7 +569,7 @@ function buildHandler(config: Config) {
       },
     };
 
-    const reportHash = hashCanonicalJson(reportForHash) as unknown as HexString;
+    const reportHash = hashCanonicalJson(reportForHash);
 
     return {
       request,

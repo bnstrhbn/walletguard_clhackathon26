@@ -93,6 +93,21 @@ test('assessRisk flags token drain pattern with multiple negative token deltas',
   assert.equal(risk.level, 'medium');
 });
 
+test('assessRisk flags UNKNOWN_CALLDATA when calldata is present but undecodable', () => {
+  const request: AnalyzeTxRequest = {
+    ...baseRequest(),
+    data: '0x12345678',
+  };
+  const simulation: SimulationResult = {
+    ...baseSimulation(),
+    decodedCalls: [],
+  };
+
+  const risk = assessRisk({ request, simulation });
+  assert.equal(risk.flags.some((f) => f.code === 'UNKNOWN_CALLDATA'), true);
+  assert.equal(risk.level, 'medium');
+});
+
 test('buildWalletGuardReport produces a stable canonical report hash', () => {
   const request = baseRequest();
   const simulation: SimulationResult = {
@@ -117,13 +132,22 @@ test('buildWalletGuardReport produces a stable canonical report hash', () => {
   });
 
   const expectedHash = hashCanonicalJson({
-    request,
-    simulation,
+    request: {
+      chainId: request.chainId,
+      from: request.from,
+      to: request.to,
+      data: request.data,
+    },
+    simulation: {
+      success: simulation.success,
+      nativeBalanceDeltas: simulation.nativeBalanceDeltas,
+      tokenBalanceDeltas: simulation.tokenBalanceDeltas,
+      decodedCalls: simulation.decodedCalls,
+    },
     risk: report.risk,
     summary: report.summary,
     provenance: {
       engineVersion: 'test',
-      workflowRunId: undefined,
     },
   });
 

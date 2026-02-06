@@ -32,6 +32,7 @@ export type SimulationResult = {
 export type RiskFlag =
   | { code: 'MAX_APPROVAL'; severity: 'high'; details: string }
   | { code: 'UNKNOWN_SPENDER'; severity: 'medium'; details: string }
+  | { code: 'UNKNOWN_CALLDATA'; severity: 'medium'; details: string }
   | { code: 'OWNER_CHANGE'; severity: 'high'; details: string }
   | { code: 'DELEGATECALL_PATH'; severity: 'high'; details: string }
   | { code: 'TOKEN_DRAIN_PATTERN'; severity: 'high'; details: string }

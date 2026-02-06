@@ -2,8 +2,17 @@ import { z } from 'zod';
 
 import type { AddressString, HexString } from './types.js';
 
+const MAX_DATA_HEX_CHARS = 200_000;
+const MAX_DECIMAL_STR_CHARS = 80;
+const MAX_METADATA_STR_CHARS = 200;
+const MAX_BLOCKTAG_CHARS = 100;
+
 const hexString: z.ZodType<HexString> = z.custom<HexString>((val) => {
-  return typeof val === 'string' && /^0x[0-9a-fA-F]*$/.test(val);
+  return (
+    typeof val === 'string' &&
+    val.length <= MAX_DATA_HEX_CHARS &&
+    /^0x(?:[0-9a-fA-F]{2})*$/.test(val)
+  );
 });
 
 const addressString: z.ZodType<AddressString> = z.custom<AddressString>((val) => {
@@ -14,13 +23,17 @@ export const AnalyzeTxRequestSchema = z.object({
   chainId: z.number().int().positive(),
   from: addressString,
   to: addressString,
-  data: hexString,
-  value: z.string().optional(),
-  blockTag: z.union([z.literal('latest'), z.string()]).optional(),
+  data: hexString.refine((v) => v === '0x' || v.length >= 10, { message: 'INVALID_CALLDATA' }),
+  value: z
+    .string()
+    .max(MAX_DECIMAL_STR_CHARS)
+    .regex(/^[0-9]+$/)
+    .optional(),
+  blockTag: z.union([z.literal('latest'), z.string().max(MAX_BLOCKTAG_CHARS)]).optional(),
   metadata: z
     .object({
-      wallet: z.string().optional(),
-      origin: z.string().optional(),
+      wallet: z.string().max(MAX_METADATA_STR_CHARS).optional(),
+      origin: z.string().max(MAX_METADATA_STR_CHARS).optional(),
     })
     .optional(),
 });
@@ -73,6 +86,12 @@ const RiskFlagUnknownSpenderSchema = z.object({
   details: z.string(),
 });
 
+const RiskFlagUnknownCalldataSchema = z.object({
+  code: z.literal('UNKNOWN_CALLDATA'),
+  severity: z.literal('medium'),
+  details: z.string(),
+});
+
 const RiskFlagOwnerChangeSchema = z.object({
   code: z.literal('OWNER_CHANGE'),
   severity: z.literal('high'),
@@ -112,6 +131,7 @@ const RiskFlagUnverifiedCodeSchema = z.object({
 export const RiskFlagSchema = z.discriminatedUnion('code', [
   RiskFlagMaxApprovalSchema,
   RiskFlagUnknownSpenderSchema,
+  RiskFlagUnknownCalldataSchema,
   RiskFlagOwnerChangeSchema,
   RiskFlagDelegatecallPathSchema,
   RiskFlagTokenDrainPatternSchema,

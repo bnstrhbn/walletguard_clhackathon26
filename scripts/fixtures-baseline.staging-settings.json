@@ -35,9 +35,9 @@
     "flags": "UNKNOWN_SPENDER"
   },
   "synth-03-unknown-selector.json": {
-    "score": 0,
-    "level": "low",
-    "flags": ""
+    "score": 40,
+    "level": "medium",
+    "flags": "UNKNOWN_CALLDATA"
   },
   "synth-04-erc721-clearApprovalForAll.json": {
     "score": 0,

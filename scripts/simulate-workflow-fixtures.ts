@@ -14,6 +14,96 @@ type Row = {
   error?: string;
 };
 
+function normalizeAddress(addr: unknown): string {
+  if (typeof addr !== 'string') return String(addr);
+  return addr.toLowerCase();
+}
+
+function normalizeHex(hex: unknown): string {
+  if (typeof hex !== 'string') return String(hex);
+  return hex.toLowerCase();
+}
+
+function normalizeDecodedCallArgs(args: unknown): Record<string, string | number | boolean> | undefined {
+  if (!args || typeof args !== 'object') return undefined;
+  const obj = args as Record<string, unknown>;
+  const out: Record<string, string | number | boolean> = {};
+  const keys = Object.keys(obj);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const v = obj[k];
+    if (typeof v === 'string') {
+      if (/^0x[0-9a-fA-F]{40}$/.test(v)) out[k] = v.toLowerCase();
+      else if (/^0x[0-9a-fA-F]*$/.test(v)) out[k] = v.toLowerCase();
+      else out[k] = v;
+    } else if (typeof v === 'number' || typeof v === 'boolean') {
+      out[k] = v;
+    } else {
+      out[k] = String(v);
+    }
+  }
+  return out;
+}
+
+function requestForCommitment(request: any): any {
+  return {
+    chainId: request && request.chainId,
+    from: normalizeAddress(request && request.from),
+    to: normalizeAddress(request && request.to),
+    data: normalizeHex(request && request.data),
+    value: request && request.value,
+    blockTag: request && request.blockTag,
+  };
+}
+
+function simulationForCommitment(simulation: any): any {
+  const nativeBalanceDeltas = Array.isArray(simulation && simulation.nativeBalanceDeltas)
+    ? simulation.nativeBalanceDeltas.map((d: any) => {
+      return { address: normalizeAddress(d && d.address), deltaWei: d && d.deltaWei };
+    })
+    : [];
+
+  const tokenBalanceDeltas = Array.isArray(simulation && simulation.tokenBalanceDeltas)
+    ? simulation.tokenBalanceDeltas.map((d: any) => {
+      return {
+        token: normalizeAddress(d && d.token),
+        holder: normalizeAddress(d && d.holder),
+        delta: d && d.delta,
+      };
+    })
+    : [];
+
+  const decodedCalls = Array.isArray(simulation && simulation.decodedCalls)
+    ? simulation.decodedCalls.map((c: any) => {
+      return {
+        to: normalizeAddress(c && c.to),
+        functionSig: c && c.functionSig ? normalizeHex(c.functionSig) : undefined,
+        functionName: c && c.functionName,
+        args: normalizeDecodedCallArgs(c && c.args),
+      };
+    })
+    : [];
+
+  const logs = Array.isArray(simulation && simulation.logs)
+    ? simulation.logs.map((l: any) => {
+      const topics = Array.isArray(l && l.topics) ? l.topics.map((t: any) => normalizeHex(t)) : [];
+      return {
+        address: normalizeAddress(l && l.address),
+        topics,
+        data: normalizeHex(l && l.data),
+      };
+    })
+    : undefined;
+
+  return {
+    success: simulation && simulation.success === true,
+    nativeBalanceDeltas,
+    tokenBalanceDeltas,
+    decodedCalls,
+    logs,
+  };
+}
+
 function parseSimulationJson(output: string): any {
   const marker = 'Workflow Simulation Result:';
   const idx = output.indexOf(marker);
@@ -145,13 +235,12 @@ function main(): void {
 
     try {
       const reportForHash = {
-        request: parsed.request,
-        simulation: parsed.simulation,
+        request: requestForCommitment(parsed.request),
+        simulation: simulationForCommitment(parsed.simulation),
         risk: parsed.risk,
         summary: parsed.summary,
         provenance: {
           engineVersion: parsed.provenance && parsed.provenance.engineVersion,
-          workflowRunId: parsed.provenance && parsed.provenance.workflowRunId,
         },
       };
       const expected = hashCanonicalJson(reportForHash);
