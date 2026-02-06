@@ -1,0 +1,52 @@
+{
+  "solodit-01-erc20-approve-limited.json": {
+    "score": 20,
+    "level": "low",
+    "flags": "UNKNOWN_SPENDER"
+  },
+  "solodit-02-erc20-approve-unlimited.json": {
+    "score": 60,
+    "level": "medium",
+    "flags": "MAX_APPROVAL,UNKNOWN_SPENDER"
+  },
+  "solodit-03-erc20-transfer.json": {
+    "score": 0,
+    "level": "low",
+    "flags": ""
+  },
+  "solodit-04-erc20-transferFrom.json": {
+    "score": 0,
+    "level": "low",
+    "flags": ""
+  },
+  "solodit-05-erc721-setApprovalForAll.json": {
+    "score": 20,
+    "level": "low",
+    "flags": "UNKNOWN_SPENDER"
+  },
+  "synth-01-eth-transfer-value-only.json": {
+    "score": 20,
+    "level": "low",
+    "flags": "SUSPICIOUS_TRANSFER"
+  },
+  "synth-02-erc20-approve-revoke.json": {
+    "score": 20,
+    "level": "low",
+    "flags": "UNKNOWN_SPENDER"
+  },
+  "synth-03-unknown-selector.json": {
+    "score": 0,
+    "level": "low",
+    "flags": ""
+  },
+  "synth-04-erc721-clearApprovalForAll.json": {
+    "score": 0,
+    "level": "low",
+    "flags": ""
+  },
+  "synth-05-erc20-transfer-large.json": {
+    "score": 0,
+    "level": "low",
+    "flags": ""
+  }
+}

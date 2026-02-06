@@ -11,6 +11,8 @@ type Config = {
 type AddressString = `0x${string}`;
 type HexString = `0x${string}`;
 
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
 type AnalyzeTxRequest = {
   chainId: number;
   from: AddressString;
@@ -108,12 +110,219 @@ function parseAnalyzeTxRequest(value: unknown): AnalyzeTxRequest {
   return out;
 }
 
+function canonicalize(value: unknown): JsonValue | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'bigint') return value.toString();
+
+  if (Array.isArray(value)) {
+    return value.map((v) => {
+      const c = canonicalize(v);
+      return c === undefined ? null : c;
+    });
+  }
+
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const out: Record<string, JsonValue> = {};
+    for (const key of Object.keys(obj).sort()) {
+      const c = canonicalize(obj[key]);
+      if (c !== undefined) out[key] = c;
+    }
+    return out;
+  }
+
+  return String(value);
+}
+
+function canonicalJsonStringify(value: unknown): string {
+  const c = canonicalize(value);
+  return JSON.stringify(c === undefined ? null : c);
+}
+
+const MASK_64 = (1n << 64n) - 1n;
+
+function rotl64(x: bigint, n: number): bigint {
+  const bn = BigInt(n);
+  return ((x << bn) | (x >> (64n - bn))) & MASK_64;
+}
+
+const ROTATION_OFFSETS: number[] = [
+  0, 1, 62, 28, 27,
+  36, 44, 6, 55, 20,
+  3, 10, 43, 25, 39,
+  41, 45, 15, 21, 8,
+  18, 2, 61, 56, 14,
+];
+
+const ROUND_CONSTANTS: bigint[] = [
+  0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an, 0x8000000080008000n,
+  0x000000000000808bn, 0x0000000080000001n, 0x8000000080008081n, 0x8000000000008009n,
+  0x000000000000008an, 0x0000000000000088n, 0x0000000080008009n, 0x000000008000000an,
+  0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n, 0x8000000000008003n,
+  0x8000000000008002n, 0x8000000000000080n, 0x000000000000800an, 0x800000008000000an,
+  0x8000000080008081n, 0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n,
+];
+
+function keccakF1600(state: bigint[]): void {
+  const b = new Array<bigint>(25);
+  const c = new Array<bigint>(5);
+  const d = new Array<bigint>(5);
+
+  for (let round = 0; round < 24; round++) {
+    for (let x = 0; x < 5; x++) {
+      c[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
+    }
+    for (let x = 0; x < 5; x++) {
+      d[x] = c[(x + 4) % 5] ^ rotl64(c[(x + 1) % 5], 1);
+    }
+    for (let i = 0; i < 25; i++) {
+      state[i] = (state[i] ^ d[i % 5]) & MASK_64;
+    }
+
+    for (let x = 0; x < 5; x++) {
+      for (let y = 0; y < 5; y++) {
+        const idx = x + 5 * y;
+        const rot = ROTATION_OFFSETS[idx];
+        const newX = y;
+        const newY = (2 * x + 3 * y) % 5;
+        b[newX + 5 * newY] = rotl64(state[idx], rot);
+      }
+    }
+
+    for (let y = 0; y < 5; y++) {
+      for (let x = 0; x < 5; x++) {
+        const idx = x + 5 * y;
+        const v0 = b[idx];
+        const v1 = b[((x + 1) % 5) + 5 * y];
+        const v2 = b[((x + 2) % 5) + 5 * y];
+        state[idx] = (v0 ^ ((~v1) & v2)) & MASK_64;
+      }
+    }
+
+    state[0] = (state[0] ^ ROUND_CONSTANTS[round]) & MASK_64;
+  }
+}
+
+function laneFromBytesLE(bytes: Uint8Array, offset: number): bigint {
+  let out = 0n;
+  for (let i = 0; i < 8; i++) {
+    out |= BigInt(bytes[offset + i] || 0) << (8n * BigInt(i));
+  }
+  return out & MASK_64;
+}
+
+function writeLaneToBytesLE(lane: bigint, out: Uint8Array, offset: number): void {
+  for (let i = 0; i < 8; i++) {
+    out[offset + i] = Number((lane >> (8n * BigInt(i))) & 0xffn);
+  }
+}
+
+function keccak256Bytes(message: Uint8Array): Uint8Array {
+  const rateBytes = 136;
+  const state = new Array<bigint>(25);
+  for (let i = 0; i < 25; i++) state[i] = 0n;
+
+  let offset = 0;
+  while (offset + rateBytes <= message.length) {
+    for (let i = 0; i < rateBytes / 8; i++) {
+      state[i] = (state[i] ^ laneFromBytesLE(message, offset + i * 8)) & MASK_64;
+    }
+    keccakF1600(state);
+    offset += rateBytes;
+  }
+
+  const block = new Uint8Array(rateBytes);
+  block.set(message.slice(offset));
+  block[message.length - offset] = 0x01;
+  block[rateBytes - 1] |= 0x80;
+
+  for (let i = 0; i < rateBytes / 8; i++) {
+    state[i] = (state[i] ^ laneFromBytesLE(block, i * 8)) & MASK_64;
+  }
+  keccakF1600(state);
+
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 4; i++) {
+    writeLaneToBytesLE(state[i], out, i * 8);
+  }
+  return out;
+}
+
+function bytesToHex(bytes: Uint8Array): HexString {
+  const hex: string[] = [];
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i];
+    hex.push(b.toString(16).padStart(2, '0'));
+  }
+  return (`0x${hex.join('')}` as HexString);
+}
+
+function keccak256Utf8(value: string): HexString {
+  const enc = new TextEncoder();
+  return bytesToHex(keccak256Bytes(enc.encode(value)));
+}
+
+function hashCanonicalJson(value: unknown): HexString {
+  return keccak256Utf8(canonicalJsonStringify(value));
+}
+
+function toBigIntDecimal(value: unknown): bigint | undefined {
+  if (typeof value !== 'string' || !/^[0-9]+$/.test(value)) return undefined;
+  try {
+    return BigInt(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function recordNativeTransferDeltas(request: AnalyzeTxRequest): Array<{ address: AddressString; deltaWei: string }> {
+  const valueWei = toBigIntDecimal(request.value);
+  if (valueWei === undefined || valueWei === 0n) return [];
+
+  return [
+    { address: request.from, deltaWei: `-${valueWei.toString()}` },
+    { address: request.to, deltaWei: valueWei.toString() },
+  ];
+}
+
 function stubSimulateTx(request: AnalyzeTxRequest): SimulationResult {
+  const decodedCalls = decodeTopLevelCall({ to: request.to, data: request.data }) as unknown as SimulationResult['decodedCalls'];
+
+  const nativeBalanceDeltas = recordNativeTransferDeltas(request);
+  const tokenBalanceDeltas: Array<{ token: AddressString; holder: AddressString; delta: string }> = [];
+
+  for (const call of decodedCalls) {
+    if (!call.functionName || !call.args) continue;
+    const args = call.args as Record<string, unknown>;
+
+    if (call.functionName === 'transfer') {
+      const to = typeof args.to === 'string' ? (args.to as AddressString) : undefined;
+      const amount = typeof args.amount === 'string' ? args.amount : undefined;
+      if (!to || amount === undefined) continue;
+      tokenBalanceDeltas.push({ token: request.to, holder: request.from, delta: `-${amount}` });
+      tokenBalanceDeltas.push({ token: request.to, holder: to, delta: amount });
+    }
+
+    if (call.functionName === 'transferFrom') {
+      const from = typeof args.from === 'string' ? (args.from as AddressString) : undefined;
+      const to = typeof args.to === 'string' ? (args.to as AddressString) : undefined;
+      const amount = typeof args.amount === 'string' ? args.amount : undefined;
+      if (!from || !to || amount === undefined) continue;
+      tokenBalanceDeltas.push({ token: request.to, holder: from, delta: `-${amount}` });
+      tokenBalanceDeltas.push({ token: request.to, holder: to, delta: amount });
+    }
+  }
+
   return {
     success: true,
-    nativeBalanceDeltas: [],
-    tokenBalanceDeltas: [],
-    decodedCalls: decodeTopLevelCall({ to: request.to, data: request.data }) as unknown as SimulationResult['decodedCalls'],
+    nativeBalanceDeltas,
+    tokenBalanceDeltas,
+    decodedCalls,
   };
 }
 
@@ -179,6 +388,18 @@ function buildHandler(config: Config) {
     const risk = assessRisk({ request, simulation }) as unknown as WalletGuardReport['risk'];
     const summary = buildSummary({ risk: risk as unknown as any, simulation }) as WalletGuardReport['summary'];
 
+    const reportForHash = {
+      request,
+      simulation,
+      risk,
+      summary,
+      provenance: {
+        engineVersion,
+      },
+    };
+
+    const reportHash = hashCanonicalJson(reportForHash) as unknown as HexString;
+
     return {
       request,
       simulation,
@@ -186,7 +407,7 @@ function buildHandler(config: Config) {
       summary,
       provenance: {
         engineVersion,
-        reportHash: `0x${'00'.repeat(32)}`,
+        reportHash,
       },
     };
   };
