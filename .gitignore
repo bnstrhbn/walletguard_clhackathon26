@@ -7,3 +7,4 @@ dist/
 
 cre-workflows/**/tmp.js
 cre-workflows/**/tmp.wasm
+cre-workflows/**/tmp.js.javy.js

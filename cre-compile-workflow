@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 
 const [, , jsFile, wasmFile] = process.argv
 
@@ -101,9 +102,25 @@ function resolveJavyPath() {
   return 'javy'
 }
 
+function transpileForJavy(jsPath) {
+  const src = fs.readFileSync(jsPath, 'utf8')
+  const out = ts.transpileModule(src, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2019,
+      module: ts.ModuleKind.ESNext,
+    },
+  }).outputText
+
+  const outPath = `${jsPath}.javy.js`
+  fs.writeFileSync(outPath, out)
+  return outPath
+}
+
 const javyPath = resolveJavyPath()
 const { witPath, pluginWasmPath, pluginId } = findWorkflowAssets()
 const initializedPluginPath = ensureInitializedPlugin(javyPath, pluginWasmPath, pluginId)
+
+const javyJsFile = transpileForJavy(path.resolve(jsFile))
 
 const res = spawnSync(
   javyPath,
@@ -115,7 +132,7 @@ const res = spawnSync(
     'wit-world=workflow',
     '-C',
     `plugin=${initializedPluginPath}`,
-    path.resolve(jsFile),
+    javyJsFile,
     '-o',
     path.resolve(wasmFile),
   ],

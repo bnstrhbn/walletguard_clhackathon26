@@ -46,12 +46,13 @@ export function assessRisk(input: {
     : decodeTopLevelCall({ to: request.to, data: request.data });
 
   const flags: RiskFlag[] = [];
-  const known = new Set((options?.knownSpenders ?? []).map((a) => normalizeAddress(a)));
+  const knownSpenders = options && options.knownSpenders ? options.knownSpenders : [];
+  const known = new Set(knownSpenders.map((a) => normalizeAddress(a)));
 
   for (const call of decodedCalls) {
     if (call.functionName === 'approve') {
-      const spender = call.args?.spender;
-      const amount = call.args?.amount;
+      const spender = call.args ? (call.args as Record<string, unknown>).spender : undefined;
+      const amount = call.args ? (call.args as Record<string, unknown>).amount : undefined;
 
       if (typeof spender === 'string' && !known.has(normalizeAddress(spender))) {
         flags.push({
@@ -74,8 +75,8 @@ export function assessRisk(input: {
     }
 
     if (call.functionName === 'setApprovalForAll') {
-      const operator = call.args?.operator;
-      const approved = call.args?.approved;
+      const operator = call.args ? (call.args as Record<string, unknown>).operator : undefined;
+      const approved = call.args ? (call.args as Record<string, unknown>).approved : undefined;
 
       if (approved === true && typeof operator === 'string' && !known.has(normalizeAddress(operator))) {
         flags.push({
