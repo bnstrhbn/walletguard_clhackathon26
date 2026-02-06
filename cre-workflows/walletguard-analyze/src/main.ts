@@ -1,4 +1,4 @@
-import { HTTPCapability, Runner, handler, type HTTPPayload, type Runtime } from '@chainlink/cre-sdk';
+import { EVMClient, HTTPCapability, Runner, encodeCallMsg, getAllNetworks, handler, type HTTPPayload, type Runtime } from '@chainlink/cre-sdk';
 
 import { decodeTopLevelCall } from '../../../packages/walletguard-core/src/decode.js';
 import { assessRisk } from '../../../packages/walletguard-core/src/riskRules.js';
@@ -6,6 +6,7 @@ import { buildSummary } from '../../../packages/walletguard-core/src/summarize.j
 
 type Config = {
   engineVersion?: string;
+  simulationMode?: 'deterministic' | 'rpc';
 };
 
 type AddressString = `0x${string}`;
@@ -290,7 +291,7 @@ function recordNativeTransferDeltas(request: AnalyzeTxRequest): Array<{ address:
   ];
 }
 
-function stubSimulateTx(request: AnalyzeTxRequest): SimulationResult {
+function simulateTxDeterministic(request: AnalyzeTxRequest): SimulationResult {
   const decodedCalls = decodeTopLevelCall({ to: request.to, data: request.data }) as unknown as SimulationResult['decodedCalls'];
 
   const nativeBalanceDeltas = recordNativeTransferDeltas(request);
@@ -324,6 +325,77 @@ function stubSimulateTx(request: AnalyzeTxRequest): SimulationResult {
     tokenBalanceDeltas,
     decodedCalls,
   };
+}
+
+function chainSelectorFromChainId(chainId: number): bigint | undefined {
+  const nets = getAllNetworks();
+  const id = String(chainId);
+  for (const n of nets) {
+    if (n && n.chainId === id && n.chainSelector && typeof n.chainSelector.selector === 'bigint') {
+      return n.chainSelector.selector;
+    }
+  }
+  return undefined;
+}
+
+function simulateTxRpc(runtime: Runtime<Config>, request: AnalyzeTxRequest): SimulationResult {
+  const decodedCalls = decodeTopLevelCall({ to: request.to, data: request.data }) as unknown as SimulationResult['decodedCalls'];
+  const selector = chainSelectorFromChainId(request.chainId);
+  if (selector === undefined) {
+    return {
+      success: false,
+      errorMessage: 'UNSUPPORTED_CHAIN',
+      nativeBalanceDeltas: [],
+      tokenBalanceDeltas: [],
+      decodedCalls,
+    };
+  }
+
+  const evm = new EVMClient(selector);
+
+  let gasUsed: string | undefined;
+  let errorMessage: string | undefined;
+  let success = true;
+
+  try {
+    const call = encodeCallMsg({ from: request.from, to: request.to, data: request.data });
+    try {
+      void evm.callContract(runtime, { call }).result();
+    } catch (e) {
+      success = false;
+      errorMessage = e instanceof Error ? e.message : String(e);
+    }
+
+    const reply = evm.estimateGas(runtime, { msg: call }).result() as unknown as { gas?: unknown };
+    if (reply && (reply as any).gas !== undefined) {
+      gasUsed = String((reply as any).gas);
+    }
+  } catch (e) {
+    success = false;
+    errorMessage = e instanceof Error ? e.message : String(e);
+  }
+
+  const simulation = success ? simulateTxDeterministic(request) : {
+    success: false,
+    nativeBalanceDeltas: [],
+    tokenBalanceDeltas: [],
+    decodedCalls,
+  };
+
+  if (gasUsed !== undefined) {
+    simulation.gasUsed = gasUsed;
+  }
+  if (!success && errorMessage !== undefined) {
+    simulation.errorMessage = errorMessage;
+  }
+
+  return simulation;
+}
+
+function simulateTx(runtime: Runtime<Config>, request: AnalyzeTxRequest, config: Config): SimulationResult {
+  const mode = config && config.simulationMode === 'rpc' ? 'rpc' : 'deterministic';
+  if (mode === 'rpc') return simulateTxRpc(runtime, request);
+  return simulateTxDeterministic(request);
 }
 
 function decodeInputJson(input: unknown): unknown {
@@ -364,8 +436,6 @@ function previewInput(input: unknown): string {
 
 function buildHandler(config: Config) {
   return (runtime: Runtime<Config>, payload: HTTPPayload): WalletGuardReport => {
-    void runtime;
-
     if (payload.input === undefined || payload.input === null) {
       throw new Error('EMPTY_INPUT');
     }
@@ -383,7 +453,7 @@ function buildHandler(config: Config) {
       ? config.engineVersion
       : 'dev';
 
-    const simulation = stubSimulateTx(request);
+    const simulation = simulateTx(runtime, request, config);
 
     const risk = assessRisk({ request, simulation }) as unknown as WalletGuardReport['risk'];
     const summary = buildSummary({ risk: risk as unknown as any, simulation }) as WalletGuardReport['summary'];

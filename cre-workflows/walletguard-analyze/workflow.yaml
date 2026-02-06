@@ -5,6 +5,13 @@ staging-settings:
     workflow-path: "./main.ts"
     config-path: "./config.staging.json"
     secrets-path: ""
+staging-settings-rpc:
+  user-workflow:
+    workflow-name: "walletguard-analyze-staging-rpc"
+  workflow-artifacts:
+    workflow-path: "./main.ts"
+    config-path: "./config.staging.rpc.json"
+    secrets-path: ""
 production-settings:
   user-workflow:
     workflow-name: "walletguard-analyze-production"
