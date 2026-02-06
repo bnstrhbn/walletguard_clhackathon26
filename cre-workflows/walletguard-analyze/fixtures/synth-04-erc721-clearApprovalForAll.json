@@ -1,0 +1,10 @@
+{
+  "chainId": 11155111,
+  "from": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "to": "0xffffffffffffffffffffffffffffffffffffffff",
+  "data": "0xa22cb465000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0000000000000000000000000000000000000000000000000000000000000000",
+  "metadata": {
+    "origin": "synthetic:erc721-clear-approval-for-all",
+    "wallet": "demo"
+  }
+}

@@ -1,0 +1,125 @@
+#!/usr/bin/env bun
+
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+const [, , jsFile, wasmFile] = process.argv
+
+if (!jsFile || !wasmFile) {
+  console.error('Usage: cre-compile-workflow <input.js> <output.wasm>')
+  process.exit(1)
+}
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url))
+
+function findRepoRoot(startDir) {
+  let dir = path.resolve(startDir)
+  while (true) {
+    const pnpmDir = path.join(dir, 'node_modules', '.pnpm')
+    if (fs.existsSync(pnpmDir)) return dir
+
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+function findWorkflowAssets() {
+  const repoRoot = findRepoRoot(scriptDir) ?? findRepoRoot(process.cwd())
+  if (!repoRoot) {
+    throw new Error('Could not locate repo root containing node_modules/.pnpm')
+  }
+
+  const pnpmDir = path.join(repoRoot, 'node_modules', '.pnpm')
+  const candidates = []
+
+  try {
+    const entries = fs.readdirSync(pnpmDir, { withFileTypes: true })
+    for (const e of entries) {
+      if (!e.isDirectory()) continue
+      if (!e.name.startsWith('@chainlink+cre-sdk-javy-plugin@')) continue
+
+      const base = path.join(pnpmDir, e.name, 'node_modules', '@chainlink', 'cre-sdk-javy-plugin', 'dist')
+      const witPath = path.join(base, 'workflow.wit')
+      const pluginWasmPath = path.join(base, 'javy_chainlink_sdk.wasm')
+      candidates.push({ witPath, pluginWasmPath, pluginId: e.name })
+    }
+  } catch {}
+
+  for (const c of candidates) {
+    if (fs.existsSync(c.witPath) && fs.existsSync(c.pluginWasmPath)) return c
+  }
+
+  throw new Error('Could not locate @chainlink/cre-sdk-javy-plugin dist assets under node_modules/.pnpm')
+}
+
+function ensureInitializedPlugin(javyPath, pluginWasmPath, pluginId) {
+  const env = process.env.CRE_JAVY_INITIALIZED_PLUGIN_PATH
+  if (env && fs.existsSync(env)) return env
+
+  const cacheBase = path.join(
+    os.homedir(),
+    '.cache',
+    'cre-sdk-javy-plugin',
+    pluginId,
+    `${os.platform()}-${os.arch()}`,
+  )
+  const out = path.join(cacheBase, 'javy-chainlink-sdk.plugin.wasm')
+  if (fs.existsSync(out)) return out
+
+  fs.mkdirSync(cacheBase, { recursive: true })
+
+  const res = spawnSync(javyPath, ['init-plugin', pluginWasmPath, '-o', out], { stdio: 'inherit' })
+  if ((res.status ?? 1) !== 0) {
+    throw new Error('javy init-plugin failed')
+  }
+
+  return out
+}
+
+function resolveJavyPath() {
+  const env = process.env.JAVY_PATH
+  if (env && fs.existsSync(env)) return env
+
+  const cacheBase = path.join(
+    os.homedir(),
+    '.cache',
+    'javy',
+    'v5.0.4',
+    `${os.platform()}-${os.arch()}`,
+  )
+  const bak = path.join(cacheBase, 'javy.v5.0.4.bak.1770333106')
+  if (fs.existsSync(bak)) return bak
+
+  const regular = path.join(cacheBase, 'javy')
+  if (fs.existsSync(regular)) return regular
+
+  return 'javy'
+}
+
+const javyPath = resolveJavyPath()
+const { witPath, pluginWasmPath, pluginId } = findWorkflowAssets()
+const initializedPluginPath = ensureInitializedPlugin(javyPath, pluginWasmPath, pluginId)
+
+const res = spawnSync(
+  javyPath,
+  [
+    'build',
+    '-C',
+    `wit=${witPath}`,
+    '-C',
+    'wit-world=workflow',
+    '-C',
+    `plugin=${initializedPluginPath}`,
+    path.resolve(jsFile),
+    '-o',
+    path.resolve(wasmFile),
+  ],
+  { stdio: 'inherit' },
+)
+
+process.exit(res.status ?? 1)

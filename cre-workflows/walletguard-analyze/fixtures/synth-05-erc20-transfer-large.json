@@ -1,0 +1,10 @@
+{
+  "chainId": 11155111,
+  "from": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "to": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "data": "0xa9059cbb000000000000000000000000dddddddddddddddddddddddddddddddddddddddd0000000000000000000000000000000000000000000000000000000005f5e100",
+  "metadata": {
+    "origin": "synthetic:erc20-transfer-large",
+    "wallet": "demo"
+  }
+}

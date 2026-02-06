@@ -1,0 +1,11 @@
+{
+  "chainId": 11155111,
+  "from": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "to": "0x1111111111111111111111111111111111111111",
+  "data": "0x",
+  "value": "100000000000000000",
+  "metadata": {
+    "origin": "synthetic:eth-transfer",
+    "wallet": "demo"
+  }
+}

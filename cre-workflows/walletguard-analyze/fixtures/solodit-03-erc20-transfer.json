@@ -1,0 +1,10 @@
+{
+  "chainId": 11155111,
+  "from": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "to": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "data": "0xa9059cbb000000000000000000000000dddddddddddddddddddddddddddddddddddddddd00000000000000000000000000000000000000000000000000000000000003e8",
+  "metadata": {
+    "origin": "solodit:erc20-transfer",
+    "wallet": "demo"
+  }
+}
