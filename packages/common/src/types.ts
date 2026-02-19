@@ -1,6 +1,47 @@
 export type HexString = `0x${string}`;
 export type AddressString = `0x${string}`;
 
+export type VaultExecutionMode = 'AUTO_EXECUTE' | 'PROPOSE_ONLY';
+
+export type VaultIntent = {
+  chainId: number;
+  vault: AddressString;
+  to: AddressString;
+  data: HexString;
+  value?: string;
+  requestId: string;
+  mode: VaultExecutionMode;
+  metadata?: {
+    origin?: string;
+  };
+};
+
+export type VaultRiskSignal = {
+  riskScore: number;
+  flags: string[];
+  reason?: string;
+};
+
+export type VaultDecision = {
+  action: 'allow' | 'warn' | 'block';
+  mode: VaultExecutionMode;
+  risk: VaultRiskSignal;
+};
+
+export type VaultReceipt = {
+  intent: VaultIntent;
+  decision: VaultDecision;
+  hashes: {
+    intentHash: HexString;
+    decisionHash: HexString;
+    receiptHash: HexString;
+  };
+  provenance: {
+    engineVersion: string;
+    workflowRunId?: string;
+  };
+};
+
 export type AnalyzeTxRequest = {
   chainId: number;
   from: AddressString;

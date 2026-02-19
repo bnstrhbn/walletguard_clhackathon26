@@ -17,6 +17,7 @@
     "cre-compile-workflow": "bun ./cre-compile-workflow",
     "fixtures:update-baseline": "bun scripts/simulate-workflow-fixtures.ts --update-baseline",
     "fixtures:check-baseline": "bun scripts/simulate-workflow-fixtures.ts --check-baseline",
+    "fixtures:rpc-smoke": "bun scripts/simulate-workflow-fixtures.ts --rpc-smoke",
     "build": "pnpm -r build",
     "dev": "pnpm -r dev",
     "test": "pnpm -r test",

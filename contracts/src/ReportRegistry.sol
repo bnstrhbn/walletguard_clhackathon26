@@ -11,6 +11,12 @@ contract ReportRegistry {
 
   mapping(bytes32 => bool) public committed;
 
+  function onReport(bytes calldata, bytes calldata report) external {
+    (bytes32 reportHash, uint256 chainId, string memory uri) = abi.decode(report, (bytes32, uint256, string));
+    committed[reportHash] = true;
+    emit ReportCommitted(reportHash, msg.sender, chainId, block.timestamp, uri);
+  }
+
   function commitReport(bytes32 reportHash, uint256 chainId, string calldata uri) external {
     committed[reportHash] = true;
     emit ReportCommitted(reportHash, msg.sender, chainId, block.timestamp, uri);

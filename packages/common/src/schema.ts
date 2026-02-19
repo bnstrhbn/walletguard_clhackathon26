@@ -197,5 +197,52 @@ export const ToolRunResponseSchema = z.object({
   receipt: ToolReceiptSchema,
 });
 
+export const VaultExecutionModeSchema = z.enum(['AUTO_EXECUTE', 'PROPOSE_ONLY']);
+
+export const VaultIntentSchema = z.object({
+  chainId: z.number().int().positive(),
+  vault: addressString,
+  to: addressString,
+  data: hexString.refine((v) => v === '0x' || v.length >= 10, { message: 'INVALID_CALLDATA' }),
+  value: z
+    .string()
+    .max(MAX_DECIMAL_STR_CHARS)
+    .regex(/^[0-9]+$/)
+    .optional(),
+  requestId: z.string().min(1).max(MAX_METADATA_STR_CHARS),
+  mode: VaultExecutionModeSchema,
+  metadata: z
+    .object({
+      origin: z.string().max(MAX_METADATA_STR_CHARS).optional(),
+    })
+    .optional(),
+});
+
+export const VaultRiskSignalSchema = z.object({
+  riskScore: z.number().min(0).max(100),
+  flags: z.array(z.string().min(1).max(MAX_METADATA_STR_CHARS)),
+  reason: z.string().max(MAX_METADATA_STR_CHARS).optional(),
+});
+
+export const VaultDecisionSchema = z.object({
+  action: z.enum(['allow', 'warn', 'block']),
+  mode: VaultExecutionModeSchema,
+  risk: VaultRiskSignalSchema,
+});
+
+export const VaultReceiptSchema = z.object({
+  intent: VaultIntentSchema,
+  decision: VaultDecisionSchema,
+  hashes: z.object({
+    intentHash: hexString,
+    decisionHash: hexString,
+    receiptHash: hexString,
+  }),
+  provenance: z.object({
+    engineVersion: z.string(),
+    workflowRunId: z.string().optional(),
+  }),
+});
+
 export type AnalyzeTxRequestInput = z.input<typeof AnalyzeTxRequestSchema>;
 export type AnalyzeTxRequestOutput = z.output<typeof AnalyzeTxRequestSchema>;

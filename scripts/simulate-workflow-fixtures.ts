@@ -156,10 +156,15 @@ function main(): void {
   let target = 'staging-settings';
   let updateBaseline = false;
   let checkBaseline = false;
+  let rpcSmoke = false;
 
   let sawWorkflow = false;
   let sawTarget = false;
   for (const arg of argv) {
+    if (arg === '--rpc-smoke') {
+      rpcSmoke = true;
+      continue;
+    }
     if (arg === '--update-baseline') {
       updateBaseline = true;
       continue;
@@ -180,6 +185,10 @@ function main(): void {
     }
   }
 
+  if (rpcSmoke && !sawTarget) {
+    target = 'staging-settings-rpc';
+  }
+
   const workflowPath = path.resolve(repoRoot, workflowRel);
   const fixturesDir = path.join(workflowPath, 'fixtures');
 
@@ -187,9 +196,25 @@ function main(): void {
     .filter((f) => f.endsWith('.json'))
     .sort((a, b) => a.localeCompare(b));
 
+  let selectedFixtures = fixtures;
+  if (rpcSmoke) {
+    const smokeList = [
+      'synth-01-eth-transfer-value-only.json',
+      'solodit-01-erc20-approve-limited.json',
+      'solodit-03-erc20-transfer.json',
+      'synth-03-unknown-selector.json',
+    ];
+    selectedFixtures = fixtures.filter((f) => smokeList.includes(f));
+    if (selectedFixtures.length === 0) {
+      selectedFixtures = fixtures.slice(0, Math.min(3, fixtures.length));
+    }
+    updateBaseline = false;
+    checkBaseline = false;
+  }
+
   const rows: Row[] = [];
 
-  for (const fixture of fixtures) {
+  for (const fixture of selectedFixtures) {
     const absFixture = path.resolve(fixturesDir, fixture);
     const args = [
       '-T',
@@ -361,6 +386,21 @@ function main(): void {
       process.exit(1);
     }
     process.stdout.write(`Baseline OK (${baselinePath}).\n`);
+  }
+
+  if (rpcSmoke) {
+    const failures = rows.filter((r) => !r.ok);
+    const envMaxFailures = process.env.RPC_SMOKE_MAX_FAILURES;
+    const maxAllowedFailures = envMaxFailures && /^\d+$/.test(envMaxFailures) ? Number(envMaxFailures) : 2;
+    if (failures.length > maxAllowedFailures) {
+      process.stderr.write(
+        `RPC smoke test failed: ${failures.length} failures (allowed=${maxAllowedFailures}) over ${rows.length} fixtures.\n`,
+      );
+      process.exit(1);
+    }
+    process.stdout.write(
+      `RPC smoke test OK: ${rows.length - failures.length}/${rows.length} fixtures succeeded (allowedFailures=${maxAllowedFailures}).\n`,
+    );
   }
 }
 

@@ -15,7 +15,9 @@
     "@walletguard/common": "workspace:*",
     "@walletguard/walletguard-core": "workspace:*",
     "cors": "^2.8.5",
-    "express": "^4.19.2"
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "viem": "^2.9.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

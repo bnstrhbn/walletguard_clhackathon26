@@ -1,4 +1,4 @@
-import { EVMClient, HTTPCapability, Runner, encodeCallMsg, getAllNetworks, handler, type HTTPPayload, type Runtime } from '@chainlink/cre-sdk';
+import { EVMClient, HTTPCapability, Runner, TxStatus, encodeCallMsg, getAllNetworks, handler, type HTTPPayload, type Runtime, type WriteCreReportRequest } from '@chainlink/cre-sdk';
 
 import { decodeTopLevelCall } from '../../../packages/walletguard-core/src/decode.js';
 import { assessRisk } from '../../../packages/walletguard-core/src/riskRules.js';
@@ -7,6 +7,9 @@ import { buildSummary } from '../../../packages/walletguard-core/src/summarize.j
 type Config = {
   engineVersion?: string;
   simulationMode?: 'deterministic' | 'rpc';
+  commitmentEnabled?: boolean;
+  commitmentReceiver?: AddressString;
+  commitmentUriBase?: string;
 };
 
 type AddressString = `0x${string}`;
@@ -286,6 +289,104 @@ function bytesToHex(bytes: Uint8Array): HexString {
 function keccak256Utf8(value: string): HexString {
   const enc = new TextEncoder();
   return bytesToHex(keccak256Bytes(enc.encode(value)));
+}
+
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = i < bytes.length ? bytes[i] : 0;
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+
+    const triplet = (b0 << 16) | (b1 << 8) | b2;
+    const c0 = (triplet >> 18) & 0x3f;
+    const c1 = (triplet >> 12) & 0x3f;
+    const c2 = (triplet >> 6) & 0x3f;
+    const c3 = triplet & 0x3f;
+
+    out += BASE64_ALPHABET[c0] + BASE64_ALPHABET[c1];
+    out += i + 1 < bytes.length ? BASE64_ALPHABET[c2] : '=';
+    out += i + 2 < bytes.length ? BASE64_ALPHABET[c3] : '=';
+  }
+  return out;
+}
+
+function hexToBytes(hex: HexString, expectedLength?: number): Uint8Array {
+  if (!isHexString(hex)) throw new Error('INVALID_HEX');
+  const clean = hex.slice(2);
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  if (expectedLength !== undefined && out.length !== expectedLength) throw new Error('INVALID_HEX_LENGTH');
+  return out;
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (let i = 0; i < parts.length; i++) total += parts[i].length;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (let i = 0; i < parts.length; i++) {
+    out.set(parts[i], offset);
+    offset += parts[i].length;
+  }
+  return out;
+}
+
+function uint256ToBytes(value: bigint): Uint8Array {
+  if (value < 0n) throw new Error('NEGATIVE_UINT');
+  const out = new Uint8Array(32);
+  let x = value;
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(x & 0xffn);
+    x >>= 8n;
+  }
+  if (x !== 0n) throw new Error('UINT_TOO_LARGE');
+  return out;
+}
+
+function encodeAbiBytes32Uint256String(bytes32: HexString, uint256: bigint, str: string): Uint8Array {
+  const b32 = hexToBytes(bytes32, 32);
+  const n = uint256ToBytes(uint256);
+
+  const enc = new TextEncoder();
+  const strBytes = enc.encode(str);
+  const strLen = uint256ToBytes(BigInt(strBytes.length));
+  const padLen = (32 - (strBytes.length % 32)) % 32;
+  const strPadded = padLen === 0 ? strBytes : concatBytes([strBytes, new Uint8Array(padLen)]);
+
+  const headLen = 32 * 3;
+  const offset = uint256ToBytes(BigInt(headLen));
+
+  return concatBytes([
+    b32,
+    n,
+    offset,
+    strLen,
+    strPadded,
+  ]);
+}
+
+function selectorFromSignature(sig: string): HexString {
+  const h = keccak256Utf8(sig);
+  return (`0x${h.slice(2, 10)}` as HexString);
+}
+
+function encodeCommittedCallData(reportHash: HexString): HexString {
+  const sel = selectorFromSignature('committed(bytes32)');
+  return (`${sel}${reportHash.slice(2)}` as HexString);
+}
+
+function decodeBool(data: Uint8Array): boolean | undefined {
+  if (!data || data.length === 0) return undefined;
+  return data[data.length - 1] !== 0;
+}
+
+function isZeroHash(hash: HexString): boolean {
+  return /^0x0{64}$/.test(hash);
 }
 
 function hashCanonicalJson(value: unknown): HexString {
@@ -571,6 +672,62 @@ function buildHandler(config: Config) {
 
     const reportHash = hashCanonicalJson(reportForHash);
 
+    let committedOnchain: WalletGuardReport['provenance']['committedOnchain'] | undefined;
+
+    try {
+      const enabled = !!(config && config.commitmentEnabled);
+      const receiver = config && typeof config.commitmentReceiver === 'string' ? config.commitmentReceiver : undefined;
+      const selector = enabled && receiver && isAddressString(receiver) ? chainSelectorFromChainId(request.chainId) : undefined;
+
+      if (enabled && receiver && isAddressString(receiver) && selector !== undefined) {
+        const evm = new EVMClient(selector);
+
+        const uriBase = config && typeof config.commitmentUriBase === 'string' ? config.commitmentUriBase : '';
+        const uri = uriBase ? `${uriBase}${reportHash}` : '';
+        const encodedPayload = encodeAbiBytes32Uint256String(reportHash, BigInt(request.chainId), uri);
+
+        const report = runtime.report({
+          encodedPayload: bytesToBase64(encodedPayload),
+          encoderName: 'evm',
+          signingAlgo: 'ecdsa',
+          hashingAlgo: 'keccak256',
+        }).result();
+
+        const writeInput: WriteCreReportRequest = {
+          receiver: hexToBytes(receiver as unknown as HexString, 20),
+          report,
+          $report: true,
+        };
+
+        const writeReply = evm.writeReport(runtime, writeInput).result() as any;
+        const txHashBytes: Uint8Array | undefined = writeReply && writeReply.txHash ? (writeReply.txHash as Uint8Array) : undefined;
+        const txHash = txHashBytes ? bytesToHex(txHashBytes) : undefined;
+
+        if (txHash && !isZeroHash(txHash)) {
+          let observedCommitted: boolean | undefined;
+          try {
+            const data = encodeCommittedCallData(reportHash);
+            const call = encodeCallMsg({ from: request.from, to: receiver, data });
+            const callReply = evm.callContract(runtime, { call }).result();
+            observedCommitted = decodeBool(callReply.data);
+          } catch {
+            observedCommitted = undefined;
+          }
+
+          if (observedCommitted === true || (writeReply && writeReply.txStatus === TxStatus.SUCCESS)) {
+            committedOnchain = {
+              chainId: request.chainId,
+              contract: receiver,
+              txHash,
+            };
+          }
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      runtime.log(`ONCHAIN_COMMIT_FAILED:${msg}`);
+    }
+
     return {
       request,
       simulation,
@@ -579,6 +736,7 @@ function buildHandler(config: Config) {
       provenance: {
         engineVersion,
         reportHash,
+        committedOnchain,
       },
     };
   };

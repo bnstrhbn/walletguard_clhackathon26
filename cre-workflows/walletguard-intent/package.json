@@ -1,0 +1,20 @@
+{
+  "name": "@walletguard/cre-walletguard-intent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "cre-compile-workflow": "bun ../../cre-compile-workflow",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@chainlink/cre-sdk": "^1.0.7",
+    "@walletguard/common": "workspace:*",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {}
+}

@@ -1,5 +1,7 @@
 import { keccak256, stringToHex } from 'viem';
 
+import type { HexString, VaultDecision, VaultIntent, VaultReceipt } from './types.js';
+
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 function canonicalize(value: unknown): JsonValue | undefined {
@@ -43,4 +45,82 @@ export function keccak256Utf8(value: string): `0x${string}` {
 
 export function hashCanonicalJson(value: unknown): `0x${string}` {
   return keccak256Utf8(canonicalJsonStringify(value));
+}
+
+function normalizeAddress(addr: string): string {
+  return addr.toLowerCase();
+}
+
+function normalizeHex(hex: string): string {
+  return hex.toLowerCase();
+}
+
+function normalizeDecimalString(value: string | undefined): string {
+  return BigInt(value ?? '0').toString();
+}
+
+function intentForHash(intent: VaultIntent): VaultIntent {
+  return {
+    chainId: intent.chainId,
+    vault: normalizeAddress(intent.vault) as VaultIntent['vault'],
+    to: normalizeAddress(intent.to) as VaultIntent['to'],
+    data: normalizeHex(intent.data) as VaultIntent['data'],
+    value: normalizeDecimalString(intent.value),
+    requestId: intent.requestId,
+    mode: intent.mode,
+    metadata: intent.metadata?.origin ? { origin: intent.metadata.origin } : undefined,
+  };
+}
+
+function decisionForHash(decision: VaultDecision): VaultDecision {
+  const flags = Array.isArray(decision.risk.flags) ? [...decision.risk.flags].sort() : [];
+  return {
+    action: decision.action,
+    mode: decision.mode,
+    risk: {
+      riskScore: decision.risk.riskScore,
+      flags,
+      reason: decision.risk.reason,
+    },
+  };
+}
+
+export function hashVaultIntent(intent: VaultIntent): HexString {
+  return hashCanonicalJson(intentForHash(intent)) as HexString;
+}
+
+export function hashVaultDecision(decision: VaultDecision): HexString {
+  return hashCanonicalJson(decisionForHash(decision)) as HexString;
+}
+
+export function hashVaultReceipt(input: { intent: VaultIntent; decision: VaultDecision }): HexString {
+  const { intent, decision } = input;
+  return hashCanonicalJson({ intent: intentForHash(intent), decision: decisionForHash(decision) }) as HexString;
+}
+
+export function buildVaultReceipt(input: {
+  intent: VaultIntent;
+  decision: VaultDecision;
+  engineVersion: string;
+  workflowRunId?: string;
+}): VaultReceipt {
+  const { intent, decision, engineVersion, workflowRunId } = input;
+  const intentHash = hashVaultIntent(intent);
+  const decisionHash = hashVaultDecision(decision);
+  const receiptHash = hashVaultReceipt({ intent, decision });
+
+  const provenance = workflowRunId === undefined
+    ? { engineVersion }
+    : { engineVersion, workflowRunId };
+
+  return {
+    intent,
+    decision,
+    hashes: {
+      intentHash,
+      decisionHash,
+      receiptHash,
+    },
+    provenance,
+  };
 }
