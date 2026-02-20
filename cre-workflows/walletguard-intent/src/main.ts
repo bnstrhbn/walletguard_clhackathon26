@@ -76,6 +76,22 @@ function decodeInputJson(input: unknown): unknown {
   throw new Error('INVALID_INPUT');
 }
 
+function stripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((v) => stripUndefined(v)) as T;
+  }
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === undefined) continue;
+      out[k] = stripUndefined(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
 function previewInput(input: unknown): string {
   try {
     if (typeof input === 'string') return input.slice(0, 200);
@@ -145,22 +161,25 @@ function buildHandler(config: Config) {
     }
 
     const parsedIntent = VaultIntentSchema.parse(decoded);
+
+    const expectedTokenBalanceDeltas = Array.isArray(parsedIntent.expectedTokenBalanceDeltas)
+      ? parsedIntent.expectedTokenBalanceDeltas.map((e) => {
+          return {
+            token: e.token.toLowerCase() as VaultIntent['vault'],
+            holder: e.holder.toLowerCase() as VaultIntent['vault'],
+            delta: String(e.delta),
+            tolerance: e.tolerance === undefined ? undefined : String(e.tolerance),
+          };
+        })
+      : undefined;
+
     const intent: VaultIntent = {
       ...parsedIntent,
       vault: parsedIntent.vault.toLowerCase() as VaultIntent['vault'],
       to: parsedIntent.to.toLowerCase() as VaultIntent['to'],
       data: parsedIntent.data.toLowerCase() as VaultIntent['data'],
       value: (parsedIntent.value ?? '0').toString(),
-      expectedTokenBalanceDeltas: Array.isArray(parsedIntent.expectedTokenBalanceDeltas)
-        ? parsedIntent.expectedTokenBalanceDeltas.map((e) => {
-            return {
-              token: e.token.toLowerCase() as VaultIntent['vault'],
-              holder: e.holder.toLowerCase() as VaultIntent['vault'],
-              delta: String(e.delta),
-              tolerance: e.tolerance === undefined ? undefined : String(e.tolerance),
-            };
-          })
-        : undefined,
+      ...(expectedTokenBalanceDeltas ? { expectedTokenBalanceDeltas } : {}),
     };
 
     const engineVersion = config && typeof config.engineVersion === 'string' && config.engineVersion
@@ -235,9 +254,24 @@ function buildHandler(config: Config) {
 
     const httpClient = new HTTPClient();
 
-    const risk = httpClient
-      .sendRequest(runtime, fetchRisk, consensusIdenticalAggregation<VaultRiskSignal>())(intent)
-      .result();
+    runtime.log(`riskCall:url=${riskApiUrl}`);
+
+    let risk: VaultRiskSignal;
+    try {
+      const raw = httpClient
+        .sendRequest(runtime, fetchRisk, consensusIdenticalAggregation<VaultRiskSignal>())(intent)
+        .result();
+      risk = parseRiskSignal(raw);
+      runtime.log(`riskCall:ok score=${risk.riskScore} flags=${risk.flags.length}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : e === undefined ? 'undefined' : e === null ? 'null' : String(e);
+      runtime.log(`riskCall:failed ${msg}`);
+      risk = {
+        riskScore: 95,
+        flags: ['RISK_API_FAILED'],
+        reason: msg,
+      };
+    }
 
     const decisionRaw = decisionFromRisk({ intent, risk });
     const decision: VaultDecision = {
@@ -248,11 +282,13 @@ function buildHandler(config: Config) {
       },
     };
 
-    return buildVaultReceipt({
-      intent,
-      decision,
-      engineVersion,
-    });
+    return stripUndefined(
+      buildVaultReceipt({
+        intent,
+        decision,
+        engineVersion,
+      }),
+    );
   };
 }
 

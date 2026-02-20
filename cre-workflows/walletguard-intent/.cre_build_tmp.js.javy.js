@@ -14552,6 +14552,22 @@ function decodeInputJson(input) {
     }
     throw new Error("INVALID_INPUT");
 }
+function stripUndefined(value2) {
+    if (Array.isArray(value2)) {
+        return value2.map((v) => stripUndefined(v));
+    }
+    if (value2 && typeof value2 === "object") {
+        const obj = value2;
+        const out = {};
+        for (const [k, v] of Object.entries(obj)) {
+            if (v === undefined)
+                continue;
+            out[k] = stripUndefined(v);
+        }
+        return out;
+    }
+    return value2;
+}
 function previewInput(input) {
     try {
         if (typeof input === "string")
@@ -14620,20 +14636,21 @@ function buildHandler(config) {
             throw new Error(`DECODE_INPUT_FAILED:${msg}:preview=${preview}`);
         }
         const parsedIntent = VaultIntentSchema.parse(decoded);
+        const expectedTokenBalanceDeltas = Array.isArray(parsedIntent.expectedTokenBalanceDeltas) ? parsedIntent.expectedTokenBalanceDeltas.map((e) => {
+            return {
+                token: e.token.toLowerCase(),
+                holder: e.holder.toLowerCase(),
+                delta: String(e.delta),
+                tolerance: e.tolerance === undefined ? undefined : String(e.tolerance)
+            };
+        }) : undefined;
         const intent = {
             ...parsedIntent,
             vault: parsedIntent.vault.toLowerCase(),
             to: parsedIntent.to.toLowerCase(),
             data: parsedIntent.data.toLowerCase(),
             value: ((_j = parsedIntent.value) !== null && _j !== void 0 ? _j : "0").toString(),
-            expectedTokenBalanceDeltas: Array.isArray(parsedIntent.expectedTokenBalanceDeltas) ? parsedIntent.expectedTokenBalanceDeltas.map((e) => {
-                return {
-                    token: e.token.toLowerCase(),
-                    holder: e.holder.toLowerCase(),
-                    delta: String(e.delta),
-                    tolerance: e.tolerance === undefined ? undefined : String(e.tolerance)
-                };
-            }) : undefined
+            ...expectedTokenBalanceDeltas ? { expectedTokenBalanceDeltas } : {}
         };
         const engineVersion = config && typeof config.engineVersion === "string" && config.engineVersion ? config.engineVersion : "dev";
         const riskApiUrl = config && typeof config.riskApiUrl === "string" ? config.riskApiUrl : "";
@@ -14693,7 +14710,22 @@ function buildHandler(config) {
             return parseRiskSignal(parsed);
         };
         const httpClient = new ClientCapability;
-        const risk = httpClient.sendRequest(runtime2, fetchRisk, consensusIdenticalAggregation())(intent).result();
+        runtime2.log(`riskCall:url=${riskApiUrl}`);
+        let risk;
+        try {
+            const raw = httpClient.sendRequest(runtime2, fetchRisk, consensusIdenticalAggregation())(intent).result();
+            risk = parseRiskSignal(raw);
+            runtime2.log(`riskCall:ok score=${risk.riskScore} flags=${risk.flags.length}`);
+        }
+        catch (e) {
+            const msg = e instanceof Error ? e.message : e === undefined ? "undefined" : e === null ? "null" : String(e);
+            runtime2.log(`riskCall:failed ${msg}`);
+            risk = {
+                riskScore: 95,
+                flags: ["RISK_API_FAILED"],
+                reason: msg
+            };
+        }
         const decisionRaw = decisionFromRisk({ intent, risk });
         const decision = {
             ...decisionRaw,
@@ -14702,11 +14734,11 @@ function buildHandler(config) {
                 flags: [...decisionRaw.risk.flags].sort()
             }
         };
-        return buildVaultReceipt({
+        return stripUndefined(buildVaultReceipt({
             intent,
             decision,
             engineVersion
-        });
+        }));
     };
 }
 function initWorkflow(config) {
