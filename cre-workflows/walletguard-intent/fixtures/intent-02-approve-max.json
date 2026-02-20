@@ -1,0 +1,12 @@
+{
+  "chainId": 11155111,
+  "vault": "0x6a9e197c0e63527c8fd2217d2f6479713671cee4",
+  "to": "0x779877a7b0d9e8603169ddbd7836e478b4624789",
+  "data": "0x095ea7b300000000000000000000000090077d0d828f177e0fe7405ea3f3b38132108648ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "value": "0",
+  "requestId": "demo-approve-max-1",
+  "mode": "AUTO_EXECUTE",
+  "metadata": {
+    "origin": "workshop"
+  }
+}

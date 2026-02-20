@@ -1,5 +1,5 @@
 {
   "engineVersion": "dev",
-  "riskApiUrl": "http://localhost:8811/risk/tx",
+  "riskApiUrl": "http://localhost:8812/risk/tx",
   "secretOwner": ""
 }

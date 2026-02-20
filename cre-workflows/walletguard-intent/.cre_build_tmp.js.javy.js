@@ -4493,61 +4493,6 @@ class Report {
         return this.report;
     }
 }
-var file_capabilities_networking_confidentialhttp_v1alpha_client = /* @__PURE__ */ fileDesc("Cj1jYXBhYmlsaXRpZXMvbmV0d29ya2luZy9jb25maWRlbnRpYWxodHRwL3YxYWxwaGEvY2xpZW50LnByb3RvEjBjYXBhYmlsaXRpZXMubmV0d29ya2luZy5jb25maWRlbnRpYWxodHRwLnYxYWxwaGEiUAoQU2VjcmV0SWRlbnRpZmllchILCgNrZXkYASABKAkSEQoJbmFtZXNwYWNlGAIgASgJEhIKBW93bmVyGAMgASgJSACIAQFCCAoGX293bmVyIpMCCgdSZXF1ZXN0EgsKA3VybBgBIAEoCRIOCgZtZXRob2QYAiABKAkSDAoEYm9keRgDIAEoCRIPCgdoZWFkZXJzGAQgAygJEnMKFnB1YmxpY190ZW1wbGF0ZV92YWx1ZXMYBSADKAsyUy5jYXBhYmlsaXRpZXMubmV0d29ya2luZy5jb25maWRlbnRpYWxodHRwLnYxYWxwaGEuUmVxdWVzdC5QdWJsaWNUZW1wbGF0ZVZhbHVlc0VudHJ5EhoKEmN1c3RvbV9jZXJ0X2J1bmRsZRgGIAEoDBo7ChlQdWJsaWNUZW1wbGF0ZVZhbHVlc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiOQoQUmVzcG9uc2VUZW1wbGF0ZRIXCgtzdGF0dXNfY29kZRgBIAEoA0ICMAASDAoEYm9keRgCIAEoDCJlChZIVFRQRW5jbGF2ZVJlcXVlc3REYXRhEksKCHJlcXVlc3RzGAEgAygLMjkuY2FwYWJpbGl0aWVzLm5ldHdvcmtpbmcuY29uZmlkZW50aWFsaHR0cC52MWFscGhhLlJlcXVlc3QizAEKEkVuY2xhdmVBY3Rpb25JbnB1dBJdChF2YXVsdF9kb25fc2VjcmV0cxgBIAMoCzJCLmNhcGFiaWxpdGllcy5uZXR3b3JraW5nLmNvbmZpZGVudGlhbGh0dHAudjFhbHBoYS5TZWNyZXRJZGVudGlmaWVyElcKBWlucHV0GAIgASgLMkguY2FwYWJpbGl0aWVzLm5ldHdvcmtpbmcuY29uZmlkZW50aWFsaHR0cC52MWFscGhhLkhUVFBFbmNsYXZlUmVxdWVzdERhdGEicAoXSFRUUEVuY2xhdmVSZXNwb25zZURhdGESVQoJcmVzcG9uc2VzGAEgAygLMkIuY2FwYWJpbGl0aWVzLm5ldHdvcmtpbmcuY29uZmlkZW50aWFsaHR0cC52MWFscGhhLlJlc3BvbnNlVGVtcGxhdGUy0QEKBkNsaWVudBKfAQoMU2VuZFJlcXVlc3RzEkQuY2FwYWJpbGl0aWVzLm5ldHdvcmtpbmcuY29uZmlkZW50aWFsaHR0cC52MWFscGhhLkVuY2xhdmVBY3Rpb25JbnB1dBpJLmNhcGFiaWxpdGllcy5uZXR3b3JraW5nLmNvbmZpZGVudGlhbGh0dHAudjFhbHBoYS5IVFRQRW5jbGF2ZVJlc3BvbnNlRGF0YRolgrUYIQgCEh1jb25maWRlbnRpYWwtaHR0cEAxLjAuMC1hbHBoYUKmAgo0Y29tLmNhcGFiaWxpdGllcy5uZXR3b3JraW5nLmNvbmZpZGVudGlhbGh0dHAudjFhbHBoYUILQ2xpZW50UHJvdG9QAaICA0NOQ6oCMENhcGFiaWxpdGllcy5OZXR3b3JraW5nLkNvbmZpZGVudGlhbGh0dHAuVjFhbHBoYcoCMENhcGFiaWxpdGllc1xOZXR3b3JraW5nXENvbmZpZGVudGlhbGh0dHBcVjFhbHBoYeICPENhcGFiaWxpdGllc1xOZXR3b3JraW5nXENvbmZpZGVudGlhbGh0dHBcVjFhbHBoYVxHUEJNZXRhZGF0YeoCM0NhcGFiaWxpdGllczo6TmV0d29ya2luZzo6Q29uZmlkZW50aWFsaHR0cDo6VjFhbHBoYWIGcHJvdG8z", [file_tools_generator_v1alpha_cre_metadata]);
-var EnclaveActionInputSchema = /* @__PURE__ */ messageDesc(file_capabilities_networking_confidentialhttp_v1alpha_client, 4);
-var HTTPEnclaveResponseDataSchema = /* @__PURE__ */ messageDesc(file_capabilities_networking_confidentialhttp_v1alpha_client, 5);
-class SendRequestser {
-    constructor(runtime, client) {
-        this.runtime = runtime;
-        this.client = client;
-    }
-    sendRequests(input) {
-        return this.client.sendRequests(this.runtime, input);
-    }
-}
-class ClientCapability {
-    sendRequests(...args) {
-        if (typeof args[1] === "function") {
-            const [runtime2, fn, consensusAggregation, unwrapOptions] = args;
-            return this.sendRequestsSugarHelper(runtime2, fn, consensusAggregation, unwrapOptions);
-        }
-        const [runtime, input] = args;
-        return this.sendRequestsCallHelper(runtime, input);
-    }
-    sendRequestsCallHelper(runtime, input) {
-        let payload;
-        if (input.$typeName) {
-            payload = input;
-        }
-        else {
-            payload = fromJson(EnclaveActionInputSchema, input);
-        }
-        const capabilityId = ClientCapability.CAPABILITY_ID;
-        const capabilityResponse = runtime.callCapability({
-            capabilityId,
-            method: "SendRequests",
-            payload,
-            inputSchema: EnclaveActionInputSchema,
-            outputSchema: HTTPEnclaveResponseDataSchema
-        });
-        return {
-            result: () => {
-                const result = capabilityResponse.result();
-                return result;
-            }
-        };
-    }
-    sendRequestsSugarHelper(runtime, fn, consensusAggregation, unwrapOptions) {
-        const wrappedFn = (runtime2, ...args) => {
-            const sendRequestser = new SendRequestser(runtime2, this);
-            return fn(sendRequestser, ...args);
-        };
-        return runtime.runInNodeMode(wrappedFn, consensusAggregation, unwrapOptions);
-    }
-}
-ClientCapability.CAPABILITY_ID = "confidential-http@1.0.0-alpha";
-ClientCapability.CAPABILITY_NAME = "confidential-http";
-ClientCapability.CAPABILITY_VERSION = "1.0.0-alpha";
 var file_capabilities_networking_http_v1alpha_client = /* @__PURE__ */ fileDesc("CjFjYXBhYmlsaXRpZXMvbmV0d29ya2luZy9odHRwL3YxYWxwaGEvY2xpZW50LnByb3RvEiRjYXBhYmlsaXRpZXMubmV0d29ya2luZy5odHRwLnYxYWxwaGEiSgoNQ2FjaGVTZXR0aW5ncxINCgVzdG9yZRgBIAEoCBIqCgdtYXhfYWdlGAIgASgLMhkuZ29vZ2xlLnByb3RvYnVmLkR1cmF0aW9uIqoCCgdSZXF1ZXN0EgsKA3VybBgBIAEoCRIOCgZtZXRob2QYAiABKAkSSwoHaGVhZGVycxgDIAMoCzI6LmNhcGFiaWxpdGllcy5uZXR3b3JraW5nLmh0dHAudjFhbHBoYS5SZXF1ZXN0LkhlYWRlcnNFbnRyeRIMCgRib2R5GAQgASgMEioKB3RpbWVvdXQYBSABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb24SSwoOY2FjaGVfc2V0dGluZ3MYBiABKAsyMy5jYXBhYmlsaXRpZXMubmV0d29ya2luZy5odHRwLnYxYWxwaGEuQ2FjaGVTZXR0aW5ncxouCgxIZWFkZXJzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASKrAQoIUmVzcG9uc2USEwoLc3RhdHVzX2NvZGUYASABKA0STAoHaGVhZGVycxgCIAMoCzI7LmNhcGFiaWxpdGllcy5uZXR3b3JraW5nLmh0dHAudjFhbHBoYS5SZXNwb25zZS5IZWFkZXJzRW50cnkSDAoEYm9keRgDIAEoDBouCgxIZWFkZXJzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ATKYAQoGQ2xpZW50EmwKC1NlbmRSZXF1ZXN0Ei0uY2FwYWJpbGl0aWVzLm5ldHdvcmtpbmcuaHR0cC52MWFscGhhLlJlcXVlc3QaLi5jYXBhYmlsaXRpZXMubmV0d29ya2luZy5odHRwLnYxYWxwaGEuUmVzcG9uc2UaIIK1GBwIAhIYaHR0cC1hY3Rpb25zQDEuMC4wLWFscGhhQuoBCihjb20uY2FwYWJpbGl0aWVzLm5ldHdvcmtpbmcuaHR0cC52MWFscGhhQgtDbGllbnRQcm90b1ABogIDQ05IqgIkQ2FwYWJpbGl0aWVzLk5ldHdvcmtpbmcuSHR0cC5WMWFscGhhygIkQ2FwYWJpbGl0aWVzXE5ldHdvcmtpbmdcSHR0cFxWMWFscGhh4gIwQ2FwYWJpbGl0aWVzXE5ldHdvcmtpbmdcSHR0cFxWMWFscGhhXEdQQk1ldGFkYXRh6gInQ2FwYWJpbGl0aWVzOjpOZXR3b3JraW5nOjpIdHRwOjpWMWFscGhhYgZwcm90bzM", [file_google_protobuf_duration, file_tools_generator_v1alpha_cre_metadata]);
 var RequestSchema = /* @__PURE__ */ messageDesc(file_capabilities_networking_http_v1alpha_client, 1);
 var ResponseSchema = /* @__PURE__ */ messageDesc(file_capabilities_networking_http_v1alpha_client, 2);
@@ -4560,7 +4505,7 @@ class SendRequester {
         return this.client.sendRequest(this.runtime, input);
     }
 }
-class ClientCapability2 {
+class ClientCapability {
     sendRequest(...args) {
         if (typeof args[1] === "function") {
             const [runtime2, fn, consensusAggregation, unwrapOptions] = args;
@@ -4577,7 +4522,7 @@ class ClientCapability2 {
         else {
             payload = fromJson(RequestSchema, input);
         }
-        const capabilityId = ClientCapability2.CAPABILITY_ID;
+        const capabilityId = ClientCapability.CAPABILITY_ID;
         const capabilityResponse = runtime.callCapability({
             capabilityId,
             method: "SendRequest",
@@ -4600,9 +4545,9 @@ class ClientCapability2 {
         return runtime.runInNodeMode(wrappedFn, consensusAggregation, unwrapOptions);
     }
 }
-ClientCapability2.CAPABILITY_ID = "http-actions@1.0.0-alpha";
-ClientCapability2.CAPABILITY_NAME = "http-actions";
-ClientCapability2.CAPABILITY_VERSION = "1.0.0-alpha";
+ClientCapability.CAPABILITY_ID = "http-actions@1.0.0-alpha";
+ClientCapability.CAPABILITY_NAME = "http-actions";
+ClientCapability.CAPABILITY_VERSION = "1.0.0-alpha";
 var file_capabilities_networking_http_v1alpha_trigger = /* @__PURE__ */ fileDesc("CjJjYXBhYmlsaXRpZXMvbmV0d29ya2luZy9odHRwL3YxYWxwaGEvdHJpZ2dlci5wcm90bxIkY2FwYWJpbGl0aWVzLm5ldHdvcmtpbmcuaHR0cC52MWFscGhhIlYKBkNvbmZpZxJMCg9hdXRob3JpemVkX2tleXMYASADKAsyMy5jYXBhYmlsaXRpZXMubmV0d29ya2luZy5odHRwLnYxYWxwaGEuQXV0aG9yaXplZEtleSJaCgdQYXlsb2FkEg0KBWlucHV0GAEgASgMEkAKA2tleRgCIAEoCzIzLmNhcGFiaWxpdGllcy5uZXR3b3JraW5nLmh0dHAudjFhbHBoYS5BdXRob3JpemVkS2V5ImAKDUF1dGhvcml6ZWRLZXkSOwoEdHlwZRgBIAEoDjItLmNhcGFiaWxpdGllcy5uZXR3b3JraW5nLmh0dHAudjFhbHBoYS5LZXlUeXBlEhIKCnB1YmxpY19rZXkYAiABKAkqOwoHS2V5VHlwZRIYChRLRVlfVFlQRV9VTlNQRUNJRklFRBAAEhYKEktFWV9UWVBFX0VDRFNBX0VWTRABMpIBCgRIVFRQEmgKB1RyaWdnZXISLC5jYXBhYmlsaXRpZXMubmV0d29ya2luZy5odHRwLnYxYWxwaGEuQ29uZmlnGi0uY2FwYWJpbGl0aWVzLm5ldHdvcmtpbmcuaHR0cC52MWFscGhhLlBheWxvYWQwARoggrUYHAgBEhhodHRwLXRyaWdnZXJAMS4wLjAtYWxwaGFC6wEKKGNvbS5jYXBhYmlsaXRpZXMubmV0d29ya2luZy5odHRwLnYxYWxwaGFCDFRyaWdnZXJQcm90b1ABogIDQ05IqgIkQ2FwYWJpbGl0aWVzLk5ldHdvcmtpbmcuSHR0cC5WMWFscGhhygIkQ2FwYWJpbGl0aWVzXE5ldHdvcmtpbmdcSHR0cFxWMWFscGhh4gIwQ2FwYWJpbGl0aWVzXE5ldHdvcmtpbmdcSHR0cFxWMWFscGhhXEdQQk1ldGFkYXRh6gInQ2FwYWJpbGl0aWVzOjpOZXR3b3JraW5nOjpIdHRwOjpWMWFscGhhYgZwcm90bzM", [file_tools_generator_v1alpha_cre_metadata]);
 var ConfigSchema = /* @__PURE__ */ messageDesc(file_capabilities_networking_http_v1alpha_trigger, 0);
 var PayloadSchema = /* @__PURE__ */ messageDesc(file_capabilities_networking_http_v1alpha_trigger, 1);
@@ -5995,7 +5940,7 @@ function sendRequesterSendReport(report, fn) {
     const request = fn(rawReport);
     return this.sendRequest(request);
 }
-ClientCapability2.prototype.sendReport = sendReport;
+ClientCapability.prototype.sendReport = sendReport;
 SendRequester.prototype.sendReport = sendRequesterSendReport;
 var network = {
     chainId: "1",
@@ -14544,6 +14489,24 @@ function buildVaultReceipt(input) {
     };
 }
 var MAX_INPUT_BYTES = 256000;
+var BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+function bytesToBase64(bytes) {
+    let out = "";
+    for (let i2 = 0; i2 < bytes.length; i2 += 3) {
+        const b0 = i2 < bytes.length ? bytes[i2] : 0;
+        const b1 = i2 + 1 < bytes.length ? bytes[i2 + 1] : 0;
+        const b2 = i2 + 2 < bytes.length ? bytes[i2 + 2] : 0;
+        const triplet = b0 << 16 | b1 << 8 | b2;
+        const c0 = triplet >> 18 & 63;
+        const c1 = triplet >> 12 & 63;
+        const c2 = triplet >> 6 & 63;
+        const c3 = triplet & 63;
+        out += BASE64_ALPHABET[c0] + BASE64_ALPHABET[c1];
+        out += i2 + 1 < bytes.length ? BASE64_ALPHABET[c2] : "=";
+        out += i2 + 2 < bytes.length ? BASE64_ALPHABET[c3] : "=";
+    }
+    return out;
+}
 function decodeInputJson(input) {
     if (typeof input === "string") {
         const trimmed = input.trim();
@@ -14674,26 +14637,18 @@ function buildHandler(config) {
                 data: intentArg.data,
                 value: (_j = intentArg.value) !== null && _j !== void 0 ? _j : "0"
             };
-            const enclaveReply = sendRequester.sendRequests({
-                input: {
-                    requests: [
-                        {
-                            url: riskApiUrl,
-                            method: "POST",
-                            body: JSON.stringify(payloadBody),
-                            headers: [
-                                `Authorization: Bearer ${riskApiKey}`,
-                                "Content-Type: application/json"
-                            ]
-                        }
-                    ]
-                }
+            const bodyBytes = new TextEncoder().encode(JSON.stringify(payloadBody));
+            const resp = sendRequester.sendRequest({
+                url: riskApiUrl,
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${riskApiKey}`,
+                    "Content-Type": "application/json"
+                },
+                body: bytesToBase64(bodyBytes)
             }).result();
-            const r0 = Array.isArray(enclaveReply.responses) ? enclaveReply.responses[0] : undefined;
-            if (!r0)
-                throw new Error("RISK_API_FAILED:NO_RESPONSE");
-            const statusCode = Number(r0.statusCode);
-            const bodyText = new TextDecoder("utf-8").decode((_k = r0.body) !== null && _k !== void 0 ? _k : new Uint8Array);
+            const statusCode = Number(resp.statusCode);
+            const bodyText = new TextDecoder("utf-8").decode((_k = resp.body) !== null && _k !== void 0 ? _k : new Uint8Array);
             if (!Number.isFinite(statusCode) || statusCode < 200 || statusCode > 299) {
                 const preview = bodyText.length > 300 ? `${bodyText.slice(0, 300)}...` : bodyText;
                 throw new Error(`RISK_API_FAILED:${statusCode}:${preview}`);
@@ -14707,8 +14662,8 @@ function buildHandler(config) {
             }
             return parseRiskSignal(parsed);
         };
-        const confHTTPClient = new ClientCapability;
-        const risk = confHTTPClient.sendRequests(runtime2, fetchRisk, consensusIdenticalAggregation())(intent).result();
+        const httpClient = new ClientCapability;
+        const risk = httpClient.sendRequest(runtime2, fetchRisk, consensusIdenticalAggregation())(intent).result();
         const decisionRaw = decisionFromRisk({ intent, risk });
         const decision = {
             ...decisionRaw,

@@ -1,11 +1,11 @@
 import {
-  ConfidentialHTTPClient,
   HTTPCapability,
+  HTTPClient,
   Runner,
   consensusIdenticalAggregation,
   handler,
-  type ConfidentialHTTPSendRequester,
   type HTTPPayload,
+  type HTTPSendRequester,
   type Runtime,
 } from '@chainlink/cre-sdk';
 
@@ -25,6 +25,28 @@ type Config = {
 };
 
 const MAX_INPUT_BYTES = 256_000;
+
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = i < bytes.length ? bytes[i] : 0;
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+
+    const triplet = (b0 << 16) | (b1 << 8) | b2;
+    const c0 = (triplet >> 18) & 0x3f;
+    const c1 = (triplet >> 12) & 0x3f;
+    const c2 = (triplet >> 6) & 0x3f;
+    const c3 = triplet & 0x3f;
+
+    out += BASE64_ALPHABET[c0] + BASE64_ALPHABET[c1];
+    out += i + 1 < bytes.length ? BASE64_ALPHABET[c2] : '=';
+    out += i + 2 < bytes.length ? BASE64_ALPHABET[c3] : '=';
+  }
+  return out;
+}
 
 function decodeInputJson(input: unknown): unknown {
   if (typeof input === 'string') {
@@ -162,7 +184,7 @@ function buildHandler(config: Config) {
 
     runtime.log(`riskApiKeyLen=${riskApiKey.length}`);
 
-    const fetchRisk = (sendRequester: ConfidentialHTTPSendRequester, intentArg: VaultIntent): VaultRiskSignal => {
+    const fetchRisk = (sendRequester: HTTPSendRequester, intentArg: VaultIntent): VaultRiskSignal => {
       const payloadBody = {
         chainId: intentArg.chainId,
         from: intentArg.vault,
@@ -171,29 +193,21 @@ function buildHandler(config: Config) {
         value: intentArg.value ?? '0',
       };
 
-      const enclaveReply = sendRequester
-        .sendRequests({
-          input: {
-            requests: [
-              {
-                url: riskApiUrl,
-                method: 'POST',
-                body: JSON.stringify(payloadBody),
-                headers: [
-                  `Authorization: Bearer ${riskApiKey}`,
-                  'Content-Type: application/json',
-                ],
-              },
-            ],
+      const bodyBytes = new TextEncoder().encode(JSON.stringify(payloadBody));
+      const resp = sendRequester
+        .sendRequest({
+          url: riskApiUrl,
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${riskApiKey}`,
+            'Content-Type': 'application/json',
           },
+          body: bytesToBase64(bodyBytes),
         })
         .result();
 
-      const r0 = Array.isArray(enclaveReply.responses) ? enclaveReply.responses[0] : undefined;
-      if (!r0) throw new Error('RISK_API_FAILED:NO_RESPONSE');
-
-      const statusCode = Number(r0.statusCode);
-      const bodyText = new TextDecoder('utf-8').decode(r0.body ?? new Uint8Array());
+      const statusCode = Number(resp.statusCode);
+      const bodyText = new TextDecoder('utf-8').decode(resp.body ?? new Uint8Array());
       if (!Number.isFinite(statusCode) || statusCode < 200 || statusCode > 299) {
         const preview = bodyText.length > 300 ? `${bodyText.slice(0, 300)}...` : bodyText;
         throw new Error(`RISK_API_FAILED:${statusCode}:${preview}`);
@@ -208,10 +222,10 @@ function buildHandler(config: Config) {
       return parseRiskSignal(parsed);
     };
 
-    const confHTTPClient = new ConfidentialHTTPClient();
+    const httpClient = new HTTPClient();
 
-    const risk = confHTTPClient
-      .sendRequests(runtime, fetchRisk, consensusIdenticalAggregation<VaultRiskSignal>())(intent)
+    const risk = httpClient
+      .sendRequest(runtime, fetchRisk, consensusIdenticalAggregation<VaultRiskSignal>())(intent)
       .result();
 
     const decisionRaw = decisionFromRisk({ intent, risk });

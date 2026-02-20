@@ -6,7 +6,8 @@
   "scripts": {
     "deploy:report-registry": "node scripts/deployReportRegistry.js",
     "deploy:walletguard-vault": "node scripts/deployWalletGuardVault.js",
-    "configure:walletguard-vault": "node scripts/configureWalletGuardVault.js"
+    "configure:walletguard-vault": "node scripts/configureWalletGuardVault.js",
+    "deploy:test-contracts": "node scripts/deployTestContracts.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

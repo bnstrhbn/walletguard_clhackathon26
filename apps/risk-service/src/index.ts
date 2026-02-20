@@ -1,14 +1,19 @@
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express, { type Request, type Response } from 'express';
+import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+dotenv.config({ path: path.resolve(__dirname, './.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../.env'), override: true });
-dotenv.config({ path: path.resolve(__dirname, './.env'), override: true });
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 type RiskRequest = {
   chainId?: number;
@@ -52,9 +57,69 @@ type AlchemySimResult = {
   revertReason?: string | null;
 };
 
+type SimSummary = {
+  decodedMethods: string[];
+  totalGasUsed: bigint;
+  revertReason?: string;
+  errorMessage?: string;
+  source?: 'alchemy' | 'tenderly:rest' | 'tenderly:rpc';
+};
+
+const debugTenderly = (() => {
+  const v = (process.env.DEBUG_TENDERLY ?? '').toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+})();
+
+function tenderlyLog(event: string, data: Record<string, unknown>) {
+  if (!debugTenderly) return;
+  try {
+    process.stdout.write(`[tenderly] ${event} ${JSON.stringify(data)}\n`);
+  } catch {
+    process.stdout.write(`[tenderly] ${event}\n`);
+  }
+}
+
+async function ethBlockNumber(rpcUrl: string): Promise<number> {
+  const resp = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'eth_blockNumber',
+      params: [],
+    }),
+  });
+
+  const json = (await resp.json()) as { result?: string };
+  const hex = typeof json?.result === 'string' ? json.result : '';
+  if (!hex || !hex.startsWith('0x')) throw new Error('ETH_BLOCK_NUMBER_MISSING');
+  return Number.parseInt(hex.slice(2), 16);
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+
+const simCache = new Map<
+  string,
+  {
+    ts: number;
+    out: { riskScore: number; flags: string[]; reason: string };
+  }
+>();
+
+function cacheKey(body: RiskRequest): string {
+  return [
+    String(body.chainId ?? ''),
+    String(body.from ?? '').toLowerCase(),
+    String(body.to ?? '').toLowerCase(),
+    String(body.value ?? '0'),
+    String(body.data ?? '').toLowerCase(),
+  ].join('|');
+}
 
 app.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({ ok: true });
@@ -75,8 +140,54 @@ function selectorFromData(data: string | undefined): string | undefined {
   return data.slice(0, 10).toLowerCase();
 }
 
+function wordAt(data: string, wordIndex: number): string | undefined {
+  if (!data.startsWith('0x')) return undefined;
+  const start = 2 + 8 + wordIndex * 64;
+  const end = start + 64;
+  if (data.length < end) return undefined;
+  return data.slice(start, end).toLowerCase();
+}
+
+function addressFromWord(word: string | undefined): string | undefined {
+  if (!word || word.length !== 64) return undefined;
+  return `0x${word.slice(24)}`.toLowerCase();
+}
+
+function isAllFs(word: string | undefined): boolean {
+  if (!word || word.length !== 64) return false;
+  return /^f{64}$/.test(word);
+}
+
+function readAllowedAddresses(): Set<string> {
+  const raw = process.env.ALLOWED_ADDRESSES;
+  if (!raw || typeof raw !== 'string') return new Set();
+  const trimmed = raw.trim();
+  if (!trimmed) return new Set();
+  return new Set(
+    trimmed
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => /^0x[0-9a-f]{40}$/.test(s)),
+  );
+}
+
+function isEmptyCalldata(data: string | undefined): boolean {
+  if (!data || typeof data !== 'string') return true;
+  const d = data.toLowerCase();
+  return d === '0x' || d === '0x0';
+}
+
 function computeRisk(reqBody: RiskRequest): { riskScore: number; flags: string[]; reason: string } {
   const flags: string[] = [];
+
+  const allowlist = readAllowedAddresses();
+
+  if (allowlist.size > 0) {
+    const target = typeof reqBody.to === 'string' ? reqBody.to.toLowerCase() : '';
+    if (/^0x[0-9a-f]{40}$/.test(target) && !allowlist.has(target)) {
+      flags.push('TARGET_NOT_ALLOWLISTED');
+    }
+  }
 
   const sig = selectorFromData(reqBody.data);
   if (!sig) {
@@ -87,6 +198,40 @@ function computeRisk(reqBody: RiskRequest): { riskScore: number; flags: string[]
     else if (sig === '0xa9059cbb') flags.push('ERC20_TRANSFER');
     else if (sig === '0x23b872dd') flags.push('ERC20_TRANSFER_FROM');
     else flags.push('UNKNOWN_SELECTOR');
+  }
+
+  if (typeof reqBody.data === 'string' && reqBody.data.startsWith('0x') && sig === '0x095ea7b3') {
+    const spenderWord = wordAt(reqBody.data, 0);
+    const spender = addressFromWord(spenderWord);
+    if (allowlist.size > 0 && spender && !allowlist.has(spender)) flags.push('SPENDER_NOT_ALLOWLISTED');
+
+    const amountWord = wordAt(reqBody.data, 1);
+    if (isAllFs(amountWord)) flags.push('MAX_APPROVAL');
+  }
+
+  if (typeof reqBody.data === 'string' && reqBody.data.startsWith('0x') && sig === '0xa22cb465') {
+    const operatorWord = wordAt(reqBody.data, 0);
+    const operator = addressFromWord(operatorWord);
+    if (allowlist.size > 0 && operator && !allowlist.has(operator)) flags.push('SPENDER_NOT_ALLOWLISTED');
+  }
+
+  if (typeof reqBody.data === 'string' && reqBody.data.startsWith('0x') && sig === '0xa9059cbb') {
+    const toWord = wordAt(reqBody.data, 0);
+    const recipient = addressFromWord(toWord);
+    if (allowlist.size > 0 && recipient && !allowlist.has(recipient)) flags.push('RECIPIENT_NOT_ALLOWLISTED');
+  }
+
+  if (typeof reqBody.data === 'string' && reqBody.data.startsWith('0x') && sig === '0x23b872dd') {
+    const toWord = wordAt(reqBody.data, 1);
+    const recipient = addressFromWord(toWord);
+    if (allowlist.size > 0 && recipient && !allowlist.has(recipient)) flags.push('RECIPIENT_NOT_ALLOWLISTED');
+  }
+
+  if (allowlist.size > 0 && isEmptyCalldata(reqBody.data)) {
+    const recipient = typeof reqBody.to === 'string' ? reqBody.to.toLowerCase() : '';
+    if (/^0x[0-9a-f]{40}$/.test(recipient) && !allowlist.has(recipient)) {
+      flags.push('RECIPIENT_NOT_ALLOWLISTED');
+    }
   }
 
   let valueWei = 0n;
@@ -100,9 +245,13 @@ function computeRisk(reqBody: RiskRequest): { riskScore: number; flags: string[]
   if (valueWei >= highValueThreshold) flags.push('HIGH_VALUE');
 
   let riskScore = 5;
-  if (flags.includes('ERC20_APPROVE') || flags.includes('ERC721_APPROVAL_FOR_ALL')) riskScore = 70;
-  else if (flags.includes('UNKNOWN_SELECTOR')) riskScore = 50;
-  else if (flags.includes('HIGH_VALUE')) riskScore = 40;
+  if (flags.includes('TARGET_NOT_ALLOWLISTED')) riskScore = Math.max(riskScore, 95);
+  if (flags.includes('RECIPIENT_NOT_ALLOWLISTED')) riskScore = Math.max(riskScore, 95);
+  if (flags.includes('SPENDER_NOT_ALLOWLISTED')) riskScore = Math.max(riskScore, 95);
+  if (flags.includes('MAX_APPROVAL')) riskScore = Math.max(riskScore, 85);
+  if (flags.includes('ERC20_APPROVE') || flags.includes('ERC721_APPROVAL_FOR_ALL')) riskScore = Math.max(riskScore, 70);
+  if (flags.includes('UNKNOWN_SELECTOR')) riskScore = Math.max(riskScore, 85);
+  if (flags.includes('HIGH_VALUE')) riskScore = Math.max(riskScore, 40);
 
   if (flags.includes('INVALID_VALUE')) riskScore = Math.max(riskScore, 60);
 
@@ -143,7 +292,7 @@ async function alchemySimulateExecution(input: {
   if (!rpcUrl) throw new Error('RPC_URL is required');
   const rpcUrlStr: string = rpcUrl;
 
-  const tx = {
+  const tx1559: Record<string, unknown> = {
     from: input.from,
     to: input.to,
     data: input.data,
@@ -152,6 +301,15 @@ async function alchemySimulateExecution(input: {
     type: '0x2',
     maxPriorityFeePerGas: '0x3b9aca00',
     maxFeePerGas: '0x174876e800',
+  };
+
+  const txLegacyZeroGasPrice: Record<string, unknown> = {
+    from: input.from,
+    to: input.to,
+    data: input.data,
+    value: decimalStringToHex(input.value),
+    gas: '0x2dc6c0',
+    gasPrice: '0x0',
   };
 
   async function doRequest(params: unknown[]) {
@@ -190,55 +348,388 @@ async function alchemySimulateExecution(input: {
     return { ok: true as const, result: parsed.result };
   }
 
-  const primary = await doRequest(['FLAT', tx, 'latest']);
-  if (primary.ok) return primary.result;
+  async function simulateWithTx(tx: Record<string, unknown>) {
+    const paramSets: unknown[][] = [
+      ['FLAT', tx, 'latest'],
+      [tx, 'latest', 'FLAT'],
+      [tx, 'FLAT', 'latest'],
+      [tx, 'latest'],
+    ];
 
-  const msg = primary.error?.message ?? '';
-  const canRetry =
-    (primary.error?.code === -32602 || primary.error?.code === -32600) &&
-    msg.toLowerCase().includes('invalid 1st argument') &&
-    msg.toLowerCase().includes('transaction');
-  if (!canRetry) {
-    throw new Error(`ALCHEMY_RPC_${primary.error?.code ?? 'ERR'}:${primary.error?.message ?? 'unknown'}`);
+    let lastError: AlchemyRpcError | undefined;
+    for (const params of paramSets) {
+      const attempt = await doRequest(params);
+      if (attempt.ok) return { ok: true as const, result: attempt.result };
+      lastError = attempt.error;
+    }
+
+    return { ok: false as const, error: lastError };
   }
 
-  const fallbackParamSets: unknown[][] = [
-    [tx, 'latest', 'FLAT'],
-    [tx, 'FLAT', 'latest'],
-    [tx, 'latest'],
-  ];
+  const first = await simulateWithTx(tx1559);
+  if (first.ok) return first.result;
 
-  let lastError: AlchemyRpcError | undefined;
-  for (const params of fallbackParamSets) {
-    const attempt = await doRequest(params);
-    if (attempt.ok) return attempt.result;
-    lastError = attempt.error;
+  const firstMsg = first.error?.message ?? '';
+  const insufficientFunds =
+    first.error?.code === -32000 &&
+    firstMsg.toLowerCase().includes('insufficient funds for gas');
+
+  if (insufficientFunds) {
+    const retry = await simulateWithTx(txLegacyZeroGasPrice);
+    if (retry.ok) return retry.result;
+    throw new Error(`ALCHEMY_RPC_${retry.error?.code ?? 'ERR'}:${retry.error?.message ?? 'unknown'}`);
   }
 
-  throw new Error(`ALCHEMY_RPC_${lastError?.code ?? 'ERR'}:${lastError?.message ?? 'unknown'}`);
+  throw new Error(`ALCHEMY_RPC_${first.error?.code ?? 'ERR'}:${first.error?.message ?? 'unknown'}`);
 }
 
-function riskFromAlchemySimulation(input: {
-  sim: AlchemySimResult;
-  heuristic: { riskScore: number; flags: string[]; reason: string };
-}): { riskScore: number; flags: string[]; reason: string } {
-  const flags = new Set<string>(input.heuristic.flags);
-  const { sim } = input;
-
-  flags.add('ALCHEMY_SIMULATED');
-
+function simSummaryFromAlchemy(sim: AlchemySimResult): SimSummary {
   const decodedMethods = (sim.calls ?? [])
     .map((c) => c.decoded?.methodName)
     .filter((m): m is string => typeof m === 'string' && m.length > 0);
 
+  const totalGasUsed = (sim.calls ?? []).reduce((acc, c) => acc + tryParseHexToBigInt(c.gasUsed), 0n);
+
+  return {
+    decodedMethods,
+    totalGasUsed,
+    revertReason: typeof sim.revertReason === 'string' ? sim.revertReason : undefined,
+    errorMessage: typeof sim.error === 'string' ? sim.error : undefined,
+    source: 'alchemy',
+  };
+}
+
+function extractSimSummaryDeep(input: unknown): SimSummary {
+  const decodedMethods = new Set<string>();
+  let totalGasUsed = 0n;
+  let revertReason: string | undefined;
+  let errorMessage: string | undefined;
+
+  const seen = new Set<unknown>();
+  const queue: Array<{ v: unknown; depth: number }> = [{ v: input, depth: 0 }];
+  const MAX_DEPTH = 10;
+  const MAX_NODES = 5000;
+  let nodes = 0;
+
+  while (queue.length > 0) {
+    const { v, depth } = queue.shift() as { v: unknown; depth: number };
+    nodes += 1;
+    if (nodes > MAX_NODES) break;
+    if (!v || typeof v !== 'object') continue;
+    if (seen.has(v)) continue;
+    seen.add(v);
+
+    const obj = v as Record<string, unknown>;
+
+    for (const [k, val] of Object.entries(obj)) {
+      const key = k.toLowerCase();
+
+      if (
+        (key === 'methodname' || key === 'method_name' || key === 'functionname' || key === 'function_name') &&
+        typeof val === 'string' &&
+        val.length > 0
+      ) {
+        decodedMethods.add(val);
+      }
+
+      if ((key === 'revertreason' || key === 'revert_reason') && typeof val === 'string' && val.length > 0) {
+        revertReason = revertReason ?? val;
+      }
+
+      if ((key === 'errormessage' || key === 'error_message' || key === 'error') && typeof val === 'string' && val.length > 0) {
+        errorMessage = errorMessage ?? val;
+      }
+
+      if (key === 'gasused' || key === 'gas_used') {
+        if (typeof val === 'string') {
+          totalGasUsed += tryParseHexToBigInt(val);
+        } else if (typeof val === 'number' && Number.isFinite(val) && val >= 0) {
+          totalGasUsed += BigInt(Math.floor(val));
+        }
+      }
+
+      if (depth < MAX_DEPTH) {
+        if (Array.isArray(val)) {
+          for (const it of val) queue.push({ v: it, depth: depth + 1 });
+        } else if (val && typeof val === 'object') {
+          queue.push({ v: val, depth: depth + 1 });
+        }
+      }
+    }
+  }
+
+  return {
+    decodedMethods: [...decodedMethods],
+    totalGasUsed,
+    revertReason,
+    errorMessage,
+  };
+}
+
+async function tenderlySimulateExecution(input: {
+  chainId?: number;
+  from: string;
+  to: string;
+  data: string;
+  value?: string;
+}): Promise<SimSummary> {
+  const rpcUrl = process.env.TENDERLY_RPC_URL;
+  const accessToken = process.env.TENDERLY_ACCESS_TOKEN;
+  const looksLikeRest =
+    typeof rpcUrl === 'string' &&
+    (rpcUrl.includes('api.tenderly.co/api/v1/') || rpcUrl.includes('/simulate') || rpcUrl.includes('/account/'));
+
+  async function simulateRest(): Promise<SimSummary> {
+    if (!accessToken) throw new Error('TENDERLY_ACCESS_TOKEN_REQUIRED');
+
+    const accountSlug = process.env.TENDERLY_ACCOUNT_SLUG ?? 'bnstrhbn';
+    const projectSlug = process.env.TENDERLY_PROJECT_SLUG ?? 'project';
+
+    const url = `https://api.tenderly.co/api/v1/account/${accountSlug}/project/${projectSlug}/simulate`;
+
+    const rpc =
+      rpcUrl && typeof rpcUrl === 'string' && rpcUrl.length > 0 && !looksLikeRest
+        ? rpcUrl
+        : (process.env.RPC_URL ?? process.env.ALCHEMY_RPC_URL);
+    let blockNumber: number | undefined;
+    if (rpc) {
+      try {
+        blockNumber = await ethBlockNumber(rpc);
+      } catch {
+        blockNumber = undefined;
+      }
+    }
+
+    const valueNum = (() => {
+      try {
+        const bi = BigInt(input.value ?? '0');
+        if (bi > BigInt(Number.MAX_SAFE_INTEGER)) return 0;
+        return Number(bi);
+      } catch {
+        return 0;
+      }
+    })();
+
+    const baseBody: Record<string, unknown> = {
+      network_id: String(input.chainId ?? 1),
+      from: input.from,
+      to: input.to,
+      input: input.data,
+      gas: 1_000_000,
+      gas_price: 0,
+      value: valueNum,
+      simulation_type: 'quick',
+    };
+
+    const candidates: Array<Record<string, unknown>> = [];
+    if (typeof blockNumber === 'number' && Number.isFinite(blockNumber)) {
+      candidates.push({ ...baseBody, block_number: blockNumber });
+    }
+    candidates.push({ ...baseBody, block_number: 'latest' });
+    candidates.push({ ...baseBody });
+
+    let lastErr: unknown;
+
+    for (const body of candidates) {
+      tenderlyLog('rest_request', {
+        url,
+        network_id: baseBody.network_id,
+        block_number: (body as { block_number?: unknown }).block_number ?? null,
+        from: input.from,
+        to: input.to,
+        dataLen: typeof input.data === 'string' ? input.data.length : null,
+        value: input.value ?? '0',
+      });
+
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Access-Key': accessToken,
+        },
+        body: JSON.stringify(body),
+      });
+
+      const rawText = await resp.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawText) as unknown;
+      } catch {
+        parsed = undefined;
+      }
+
+      if (!resp.ok) {
+        const bodyPreview = rawText.length > 400 ? `${rawText.slice(0, 400)}...` : rawText;
+        const err = new Error(`TENDERLY_REST_HTTP_${resp.status}${bodyPreview ? `:${bodyPreview}` : ''}`);
+        lastErr = err;
+
+        tenderlyLog('rest_response_error', {
+          status: resp.status,
+          bodyPreview,
+        });
+
+        const preview = bodyPreview.toLowerCase();
+        const retryable = resp.status === 400 && preview.includes('json_unmarshal');
+        if (retryable) continue;
+        throw err;
+      }
+
+      const summary = extractSimSummaryDeep(parsed);
+      summary.source = 'tenderly:rest';
+      tenderlyLog('rest_response_ok', {
+        status: resp.status,
+        decodedMethods: summary.decodedMethods,
+        totalGasUsed: summary.totalGasUsed.toString(),
+        revertReason: summary.revertReason ?? null,
+        errorMessage: summary.errorMessage ?? null,
+      });
+      return summary;
+    }
+
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr ?? 'TENDERLY_REST_FAILED'));
+  }
+
+  let restErr: unknown | undefined;
+  if (accessToken) {
+    try {
+      return await simulateRest();
+    } catch (e) {
+      restErr = e;
+    }
+  }
+
+  if (rpcUrl && typeof rpcUrl === 'string' && rpcUrl.length > 0 && !looksLikeRest) {
+    try {
+      const rpcEndpoint = rpcUrl;
+      const fromLower = input.from.toLowerCase();
+      const toLower = input.to.toLowerCase();
+      const dataLower = typeof input.data === 'string' ? input.data.toLowerCase() : input.data;
+      const stateOverrides = {
+        [fromLower]: {
+          balance: '0x8ac7230489e80000',
+        },
+      };
+      async function simulateRpcOnce(tx: Record<string, unknown>): Promise<SimSummary> {
+        const payload = {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tenderly_simulateTransaction',
+          params: [tx, 'latest', stateOverrides],
+        };
+
+        tenderlyLog('rpc_request', {
+          rpcEndpoint,
+          from: fromLower,
+          to: toLower,
+          dataLen: typeof dataLower === 'string' ? dataLower.length : null,
+          txKeys: Object.keys(tx).sort(),
+        });
+
+        const resp = await fetch(rpcEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(accessToken ? { 'X-Access-Key': accessToken } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        const rawText = await resp.text();
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(rawText) as unknown;
+        } catch {
+          parsed = undefined;
+        }
+
+        if (!resp.ok) {
+          const bodyPreview = rawText.length > 400 ? `${rawText.slice(0, 400)}...` : rawText;
+          tenderlyLog('rpc_response_error', { status: resp.status, bodyPreview });
+          throw new Error(`TENDERLY_RPC_HTTP_${resp.status}${bodyPreview ? `:${bodyPreview}` : ''}`);
+        }
+
+        const errMsg = (parsed as { error?: { message?: string } } | undefined)?.error?.message;
+        if (errMsg) throw new Error(`TENDERLY_RPC_ERROR:${errMsg}`);
+
+        const result = (parsed as { result?: unknown } | undefined)?.result;
+        if (!result) throw new Error('TENDERLY_EMPTY_RESULT');
+
+        const summary = extractSimSummaryDeep(result);
+        summary.source = 'tenderly:rpc';
+        tenderlyLog('rpc_response_ok', {
+          decodedMethods: summary.decodedMethods,
+          totalGasUsed: summary.totalGasUsed.toString(),
+          revertReason: summary.revertReason ?? null,
+          errorMessage: summary.errorMessage ?? null,
+        });
+        return summary;
+      }
+
+      const tx1559 = {
+        from: fromLower,
+        to: toLower,
+        gas: '0x0f4240',
+        type: '0x2',
+        maxPriorityFeePerGas: '0x3b9aca00',
+        maxFeePerGas: '0x174876e800',
+        value: decimalStringToHex(input.value),
+        data: dataLower,
+      };
+
+      try {
+        return await simulateRpcOnce(tx1559);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!msg.includes('json_unmarshal')) throw e;
+
+        const txLegacy = {
+          from: fromLower,
+          to: toLower,
+          gas: '0x0f4240',
+          gasPrice: '0x0',
+          value: decimalStringToHex(input.value),
+          data: dataLower,
+        };
+
+        return await simulateRpcOnce(txLegacy);
+      }
+    } catch (e) {
+      if (restErr) {
+        const restMsg = restErr instanceof Error ? restErr.message : String(restErr);
+        const rpcMsg = e instanceof Error ? e.message : String(e);
+        throw new Error(`TENDERLY_REST_FAILED:${restMsg}:TENDERLY_RPC_FAILED:${rpcMsg}`);
+      }
+
+      if (!accessToken) throw e;
+    }
+  }
+
+  if (restErr) throw restErr;
+
+  return await simulateRest();
+}
+
+function riskFromSimSummary(input: {
+  provider: 'alchemy' | 'tenderly';
+  summary: SimSummary;
+  heuristic: { riskScore: number; flags: string[]; reason: string };
+}): { riskScore: number; flags: string[]; reason: string } {
+  const flags = new Set<string>(input.heuristic.flags);
+
+  if (input.provider === 'alchemy') flags.add('ALCHEMY_SIMULATED');
+  else flags.add('TENDERLY_SIMULATED');
+
+  if (input.summary.source === 'tenderly:rest') flags.add('TENDERLY_REST');
+  if (input.summary.source === 'tenderly:rpc') flags.add('TENDERLY_RPC');
+
+  const decodedMethods = input.summary.decodedMethods;
+
   if (decodedMethods.includes('approve')) flags.add('SIM_DECODE_APPROVE');
   if (decodedMethods.includes('setApprovalForAll')) flags.add('SIM_DECODE_SET_APPROVAL_FOR_ALL');
 
-  const totalGasUsed = (sim.calls ?? []).reduce((acc, c) => acc + tryParseHexToBigInt(c.gasUsed), 0n);
-  if (totalGasUsed > 500_000n) flags.add('SIM_HIGH_GAS');
-
-  if (sim.revertReason) flags.add('SIM_REVERT');
-  if (sim.error && sim.error.length > 0) flags.add('SIM_ERROR');
+  if (input.summary.totalGasUsed > 500_000n) flags.add('SIM_HIGH_GAS');
+  if (input.summary.revertReason) flags.add('SIM_REVERT');
+  if (input.summary.errorMessage && input.summary.errorMessage.length > 0) flags.add('SIM_ERROR');
 
   let simScore = 0;
   if (flags.has('SIM_DECODE_APPROVE') || flags.has('SIM_DECODE_SET_APPROVAL_FOR_ALL')) simScore = 70;
@@ -247,17 +738,41 @@ function riskFromAlchemySimulation(input: {
 
   const riskScore = Math.max(input.heuristic.riskScore, simScore);
 
-  const reason = sim.revertReason
-    ? `alchemy:revert:${sim.revertReason}`
-    : decodedMethods[0]
-      ? `alchemy:method:${decodedMethods[0]}`
-      : 'alchemy:ok';
+  const providerLabel =
+    input.summary.source === 'tenderly:rest'
+      ? 'tenderly:rest'
+      : input.summary.source === 'tenderly:rpc'
+        ? 'tenderly:rpc'
+        : input.provider;
+
+  const errorPreview =
+    typeof input.summary.errorMessage === 'string' && input.summary.errorMessage.length > 0
+      ? input.summary.errorMessage.length > 180
+        ? `${input.summary.errorMessage.slice(0, 180)}...`
+        : input.summary.errorMessage
+      : '';
+
+  const reason = input.summary.revertReason
+    ? `${providerLabel}:revert:${input.summary.revertReason}`
+    : errorPreview
+      ? `${providerLabel}:error:${errorPreview}`
+      : decodedMethods[0]
+        ? `${providerLabel}:method:${decodedMethods[0]}`
+        : `${providerLabel}:ok`;
 
   return {
     riskScore,
     flags: [...flags].sort(),
     reason,
   };
+}
+
+function riskFromAlchemySimulation(input: {
+  sim: AlchemySimResult;
+  heuristic: { riskScore: number; flags: string[]; reason: string };
+}): { riskScore: number; flags: string[]; reason: string } {
+  const summary = simSummaryFromAlchemy(input.sim);
+  return riskFromSimSummary({ provider: 'alchemy', summary, heuristic: input.heuristic });
 }
 
 app.post('/risk/tx', async (req: Request, res: Response) => {
@@ -288,42 +803,222 @@ app.post('/risk/tx', async (req: Request, res: Response) => {
 
   const body = (req.body ?? {}) as RiskRequest;
 
+  const key = cacheKey(body);
+  const cached = simCache.get(key);
+  const now = Date.now();
+  const TTL_MS = 3_000;
+  if (cached && now - cached.ts < TTL_MS) {
+    res.status(200).json(cached.out);
+    return;
+  }
+  if (cached) simCache.delete(key);
+
   const heuristic = computeRisk(body);
 
   const canSimulate = Boolean(body.from && body.to && body.data);
   if (!canSimulate) {
-    res.status(200).json({
+    const out = {
       ...heuristic,
       flags: [...new Set([...heuristic.flags, 'ALCHEMY_SIM_SKIPPED'])].sort(),
       reason: 'alchemy:skipped',
-    });
+    };
+    simCache.set(key, { ts: now, out });
+    res.status(200).json(out);
     return;
   }
 
-  try {
-    const sim = await alchemySimulateExecution({
+  const tenderlyConfigured = Boolean(process.env.TENDERLY_ACCESS_TOKEN || process.env.TENDERLY_RPC_URL);
+
+  let tenderlyErr: unknown;
+  if (tenderlyConfigured) {
+    tenderlyLog('primary_attempt', {
+      chainId: body.chainId ?? null,
       from: body.from as string,
       to: body.to as string,
-      data: body.data as string,
-      value: body.value,
+      dataLen: typeof body.data === 'string' ? body.data.length : null,
+      value: body.value ?? '0',
     });
+    try {
+      const summary = await tenderlySimulateExecution({
+        chainId: body.chainId,
+        from: body.from as string,
+        to: body.to as string,
+        data: body.data as string,
+        value: body.value,
+      });
 
-    const out = riskFromAlchemySimulation({ sim, heuristic });
+      const out = riskFromSimSummary({ provider: 'tenderly', summary, heuristic });
+      tenderlyLog('primary_used', {
+        source: summary.source ?? null,
+        riskScore: out.riskScore,
+        flags: out.flags,
+        reason: out.reason,
+      });
+      simCache.set(key, { ts: Date.now(), out });
+      res.status(200).json(out);
+      return;
+    } catch (e) {
+      tenderlyErr = e;
+      tenderlyLog('primary_failed', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  try {
+    let sim: AlchemySimResult | undefined;
+    let lastErr: unknown;
+
+    for (const waitMs of [0, 250, 750]) {
+      if (waitMs > 0) await sleep(waitMs);
+      try {
+        sim = await alchemySimulateExecution({
+          from: body.from as string,
+          to: body.to as string,
+          data: body.data as string,
+          value: body.value,
+        });
+        break;
+      } catch (e) {
+        lastErr = e;
+        const msg = e instanceof Error ? e.message : String(e);
+        const is429 = msg.includes('ALCHEMY_RPC_429') || msg.includes('ALCHEMY_HTTP_429');
+        if (!is429) break;
+      }
+    }
+
+    if (sim) {
+      const out = riskFromAlchemySimulation({ sim, heuristic });
+      tenderlyLog('fallback_used', {
+        provider: 'alchemy',
+        riskScore: out.riskScore,
+        flags: out.flags,
+        reason: out.reason,
+      });
+      simCache.set(key, { ts: Date.now(), out });
+      res.status(200).json(out);
+      return;
+    }
+
+    const alchemyMsg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+    const tenderlyMsg = tenderlyErr instanceof Error ? tenderlyErr.message : String(tenderlyErr);
+    const out = {
+      ...heuristic,
+      riskScore: Math.max(heuristic.riskScore, 40),
+      flags: [
+        ...new Set([
+          ...heuristic.flags,
+          ...(tenderlyConfigured ? ['TENDERLY_SIM_FAILED'] : []),
+          'ALCHEMY_SIM_FAILED',
+          'SIM_UNAVAILABLE',
+        ]),
+      ].sort(),
+      reason: tenderlyConfigured
+        ? `sim:failed:tenderly:${tenderlyMsg}:alchemy:${alchemyMsg}`
+        : `sim:failed:alchemy:${alchemyMsg}`,
+    };
+    simCache.set(key, { ts: Date.now(), out });
     res.status(200).json(out);
+    return;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    res.status(200).json({
+    const out = {
       ...heuristic,
-      flags: [...new Set([...heuristic.flags, 'ALCHEMY_SIM_FAILED'])].sort(),
+      riskScore: Math.max(heuristic.riskScore, 40),
+      flags: [...new Set([...heuristic.flags, 'ALCHEMY_SIM_FAILED', 'SIM_UNAVAILABLE'])].sort(),
       reason: `alchemy:failed:${msg}`,
-    });
+    };
+    simCache.set(key, { ts: Date.now(), out });
+    res.status(200).json(out);
   }
 });
 
 const port = process.env.PORT ? Number(process.env.PORT) : 8811;
 
-app.listen(port, () => {
-  const expected = process.env.RISK_API_KEY_ALL;
-  console.log(`Auth enabled: ${Boolean(expected)}${expected ? ` (expectedLen=${expected.length})` : ''}`);
-  console.log(`Mock risk service listening on :${port}`);
-});
+let server: Server | undefined;
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+function startServer(attempt: number) {
+  const next = createServer(app);
+  server = next;
+
+  next.on('error', (err: unknown) => {
+    const e = err as { code?: string; message?: string };
+    if (e?.code === 'EADDRINUSE') {
+      const delayMs = Math.min(250 * (attempt + 1), 5_000);
+      try {
+        next.close();
+      } catch {
+        // ignore
+      }
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => startServer(attempt + 1), delayMs);
+      return;
+    }
+    process.stderr.write(String((err as { stack?: unknown })?.stack ?? err) + '\n');
+    process.exit(1);
+  });
+
+  try {
+    next.listen(port, () => {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
+      }
+      const expected = process.env.RISK_API_KEY_ALL;
+      console.log(`Auth enabled: ${Boolean(expected)}${expected ? ` (expectedLen=${expected.length})` : ''}`);
+      console.log(`Mock risk service listening on :${port}`);
+    });
+  } catch (err) {
+    const e = err as { code?: string; message?: string };
+    if (e?.code === 'EADDRINUSE') {
+      const delayMs = Math.min(250 * (attempt + 1), 5_000);
+      try {
+        next.close();
+      } catch {
+        // ignore
+      }
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => startServer(attempt + 1), delayMs);
+      return;
+    }
+    throw err;
+  }
+}
+
+function shutdown(code: number) {
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = undefined;
+  }
+  if (!server) {
+    process.exit(code);
+    return;
+  }
+
+  const s = server;
+  const force = setTimeout(() => process.exit(code), 1_000);
+  force.unref();
+
+  try {
+    (s as unknown as { closeIdleConnections?: () => void }).closeIdleConnections?.();
+  } catch {
+    // ignore
+  }
+
+  try {
+    (s as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
+  } catch {
+    // ignore
+  }
+
+  s.close(() => {
+    clearTimeout(force);
+    process.exit(code);
+  });
+}
+
+process.on('SIGTERM', () => shutdown(0));
+process.on('SIGINT', () => shutdown(0));
+
+startServer(0);
