@@ -88,6 +88,16 @@ intentRouter.post('/analyze', async (req: express.Request, res: express.Response
     to: parsed.data.to.toLowerCase() as VaultIntent['to'],
     data: parsed.data.data.toLowerCase() as VaultIntent['data'],
     value: (parsed.data.value ?? '0').toString(),
+    expectedTokenBalanceDeltas: Array.isArray(parsed.data.expectedTokenBalanceDeltas)
+      ? parsed.data.expectedTokenBalanceDeltas.map((e) => {
+          return {
+            token: e.token.toLowerCase() as VaultIntent['vault'],
+            holder: e.holder.toLowerCase() as VaultIntent['vault'],
+            delta: String(e.delta),
+            tolerance: e.tolerance === undefined ? undefined : String(e.tolerance),
+          };
+        })
+      : undefined,
   };
 
   let riskApiUrl: string;
@@ -113,6 +123,7 @@ intentRouter.post('/analyze', async (req: express.Request, res: express.Response
         to: intent.to,
         data: intent.data,
         value: intent.value ?? '0',
+        expectedTokenBalanceDeltas: intent.expectedTokenBalanceDeltas,
       }),
     });
 

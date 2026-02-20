@@ -59,13 +59,35 @@ function normalizeDecimalString(value: string | undefined): string {
   return BigInt(value ?? '0').toString();
 }
 
+function normalizeSignedDecimalString(value: string | undefined): string {
+  return BigInt(value ?? '0').toString();
+}
+
 function intentForHash(intent: VaultIntent): VaultIntent {
+  const expected = Array.isArray((intent as VaultIntent).expectedTokenBalanceDeltas)
+    ? [...((intent as VaultIntent).expectedTokenBalanceDeltas ?? [])]
+        .map((e) => {
+          const token = normalizeAddress(String((e as { token?: string }).token ?? ''));
+          const holder = normalizeAddress(String((e as { holder?: string }).holder ?? ''));
+          const delta = normalizeSignedDecimalString((e as { delta?: string }).delta);
+          const toleranceRaw = (e as { tolerance?: string }).tolerance;
+          const tolerance = toleranceRaw === undefined ? undefined : normalizeDecimalString(toleranceRaw);
+          return { token, holder, delta, tolerance };
+        })
+        .sort((a, b) =>
+          `${a.token}|${a.holder}|${a.delta}|${a.tolerance ?? ''}`.localeCompare(
+            `${b.token}|${b.holder}|${b.delta}|${b.tolerance ?? ''}`,
+          ),
+        )
+    : undefined;
+
   return {
     chainId: intent.chainId,
     vault: normalizeAddress(intent.vault) as VaultIntent['vault'],
     to: normalizeAddress(intent.to) as VaultIntent['to'],
     data: normalizeHex(intent.data) as VaultIntent['data'],
     value: normalizeDecimalString(intent.value),
+    expectedTokenBalanceDeltas: expected as VaultIntent['expectedTokenBalanceDeltas'],
     requestId: intent.requestId,
     mode: intent.mode,
     metadata: intent.metadata?.origin ? { origin: intent.metadata.origin } : undefined,

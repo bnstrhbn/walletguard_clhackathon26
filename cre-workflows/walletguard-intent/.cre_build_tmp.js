@@ -14269,12 +14269,20 @@ var ToolRunResponseSchema = z.object({
   receipt: ToolReceiptSchema
 });
 var VaultExecutionModeSchema = z.enum(["AUTO_EXECUTE", "PROPOSE_ONLY"]);
+var signedDecimalString = z.string().max(MAX_DECIMAL_STR_CHARS).regex(/^-?[0-9]+$/);
+var unsignedDecimalString = z.string().max(MAX_DECIMAL_STR_CHARS).regex(/^[0-9]+$/);
 var VaultIntentSchema = z.object({
   chainId: z.number().int().positive(),
   vault: addressString,
   to: addressString,
   data: hexString.refine((v) => v === "0x" || v.length >= 10, { message: "INVALID_CALLDATA" }),
   value: z.string().max(MAX_DECIMAL_STR_CHARS).regex(/^[0-9]+$/).optional(),
+  expectedTokenBalanceDeltas: z.array(z.object({
+    token: addressString,
+    holder: addressString,
+    delta: signedDecimalString,
+    tolerance: unsignedDecimalString.optional()
+  })).optional(),
   requestId: z.string().min(1).max(MAX_METADATA_STR_CHARS),
   mode: VaultExecutionModeSchema,
   metadata: z.object({
@@ -14352,13 +14360,25 @@ function normalizeHex(hex) {
 function normalizeDecimalString(value2) {
   return BigInt(value2 ?? "0").toString();
 }
+function normalizeSignedDecimalString(value2) {
+  return BigInt(value2 ?? "0").toString();
+}
 function intentForHash(intent) {
+  const expected = Array.isArray(intent.expectedTokenBalanceDeltas) ? [...intent.expectedTokenBalanceDeltas ?? []].map((e) => {
+    const token = normalizeAddress(String(e.token ?? ""));
+    const holder = normalizeAddress(String(e.holder ?? ""));
+    const delta = normalizeSignedDecimalString(e.delta);
+    const toleranceRaw = e.tolerance;
+    const tolerance = toleranceRaw === undefined ? undefined : normalizeDecimalString(toleranceRaw);
+    return { token, holder, delta, tolerance };
+  }).sort((a, b) => `${a.token}|${a.holder}|${a.delta}|${a.tolerance ?? ""}`.localeCompare(`${b.token}|${b.holder}|${b.delta}|${b.tolerance ?? ""}`)) : undefined;
   return {
     chainId: intent.chainId,
     vault: normalizeAddress(intent.vault),
     to: normalizeAddress(intent.to),
     data: normalizeHex(intent.data),
     value: normalizeDecimalString(intent.value),
+    expectedTokenBalanceDeltas: expected,
     requestId: intent.requestId,
     mode: intent.mode,
     metadata: intent.metadata?.origin ? { origin: intent.metadata.origin } : undefined
@@ -14516,7 +14536,15 @@ function buildHandler(config) {
       vault: parsedIntent.vault.toLowerCase(),
       to: parsedIntent.to.toLowerCase(),
       data: parsedIntent.data.toLowerCase(),
-      value: (parsedIntent.value ?? "0").toString()
+      value: (parsedIntent.value ?? "0").toString(),
+      expectedTokenBalanceDeltas: Array.isArray(parsedIntent.expectedTokenBalanceDeltas) ? parsedIntent.expectedTokenBalanceDeltas.map((e) => {
+        return {
+          token: e.token.toLowerCase(),
+          holder: e.holder.toLowerCase(),
+          delta: String(e.delta),
+          tolerance: e.tolerance === undefined ? undefined : String(e.tolerance)
+        };
+      }) : undefined
     };
     const engineVersion = config && typeof config.engineVersion === "string" && config.engineVersion ? config.engineVersion : "dev";
     const riskApiUrl = config && typeof config.riskApiUrl === "string" ? config.riskApiUrl : "";
@@ -14545,7 +14573,8 @@ function buildHandler(config) {
         from: intentArg.vault,
         to: intentArg.to,
         data: intentArg.data,
-        value: intentArg.value ?? "0"
+        value: intentArg.value ?? "0",
+        expectedTokenBalanceDeltas: intentArg.expectedTokenBalanceDeltas
       };
       const bodyBytes = new TextEncoder().encode(JSON.stringify(payloadBody));
       const resp = sendRequester.sendRequest({

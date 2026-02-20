@@ -14352,12 +14352,20 @@ var ToolRunResponseSchema = z.object({
     receipt: ToolReceiptSchema
 });
 var VaultExecutionModeSchema = z.enum(["AUTO_EXECUTE", "PROPOSE_ONLY"]);
+var signedDecimalString = z.string().max(MAX_DECIMAL_STR_CHARS).regex(/^-?[0-9]+$/);
+var unsignedDecimalString = z.string().max(MAX_DECIMAL_STR_CHARS).regex(/^[0-9]+$/);
 var VaultIntentSchema = z.object({
     chainId: z.number().int().positive(),
     vault: addressString,
     to: addressString,
     data: hexString.refine((v) => v === "0x" || v.length >= 10, { message: "INVALID_CALLDATA" }),
     value: z.string().max(MAX_DECIMAL_STR_CHARS).regex(/^[0-9]+$/).optional(),
+    expectedTokenBalanceDeltas: z.array(z.object({
+        token: addressString,
+        holder: addressString,
+        delta: signedDecimalString,
+        tolerance: unsignedDecimalString.optional()
+    })).optional(),
     requestId: z.string().min(1).max(MAX_METADATA_STR_CHARS),
     mode: VaultExecutionModeSchema,
     metadata: z.object({
@@ -14436,17 +14444,30 @@ function normalizeHex(hex) {
 function normalizeDecimalString(value2) {
     return BigInt(value2 !== null && value2 !== void 0 ? value2 : "0").toString();
 }
+function normalizeSignedDecimalString(value2) {
+    return BigInt(value2 !== null && value2 !== void 0 ? value2 : "0").toString();
+}
 function intentForHash(intent) {
-    var _j;
+    var _j, _k;
+    const expected = Array.isArray(intent.expectedTokenBalanceDeltas) ? [...(_j = intent.expectedTokenBalanceDeltas) !== null && _j !== void 0 ? _j : []].map((e) => {
+        var _j, _k;
+        const token = normalizeAddress(String((_j = e.token) !== null && _j !== void 0 ? _j : ""));
+        const holder = normalizeAddress(String((_k = e.holder) !== null && _k !== void 0 ? _k : ""));
+        const delta = normalizeSignedDecimalString(e.delta);
+        const toleranceRaw = e.tolerance;
+        const tolerance = toleranceRaw === undefined ? undefined : normalizeDecimalString(toleranceRaw);
+        return { token, holder, delta, tolerance };
+    }).sort((a, b) => { var _j, _k; return `${a.token}|${a.holder}|${a.delta}|${(_j = a.tolerance) !== null && _j !== void 0 ? _j : ""}`.localeCompare(`${b.token}|${b.holder}|${b.delta}|${(_k = b.tolerance) !== null && _k !== void 0 ? _k : ""}`); }) : undefined;
     return {
         chainId: intent.chainId,
         vault: normalizeAddress(intent.vault),
         to: normalizeAddress(intent.to),
         data: normalizeHex(intent.data),
         value: normalizeDecimalString(intent.value),
+        expectedTokenBalanceDeltas: expected,
         requestId: intent.requestId,
         mode: intent.mode,
-        metadata: ((_j = intent.metadata) === null || _j === void 0 ? void 0 : _j.origin) ? { origin: intent.metadata.origin } : undefined
+        metadata: ((_k = intent.metadata) === null || _k === void 0 ? void 0 : _k.origin) ? { origin: intent.metadata.origin } : undefined
     };
 }
 function decisionForHash(decision) {
@@ -14604,7 +14625,15 @@ function buildHandler(config) {
             vault: parsedIntent.vault.toLowerCase(),
             to: parsedIntent.to.toLowerCase(),
             data: parsedIntent.data.toLowerCase(),
-            value: ((_j = parsedIntent.value) !== null && _j !== void 0 ? _j : "0").toString()
+            value: ((_j = parsedIntent.value) !== null && _j !== void 0 ? _j : "0").toString(),
+            expectedTokenBalanceDeltas: Array.isArray(parsedIntent.expectedTokenBalanceDeltas) ? parsedIntent.expectedTokenBalanceDeltas.map((e) => {
+                return {
+                    token: e.token.toLowerCase(),
+                    holder: e.holder.toLowerCase(),
+                    delta: String(e.delta),
+                    tolerance: e.tolerance === undefined ? undefined : String(e.tolerance)
+                };
+            }) : undefined
         };
         const engineVersion = config && typeof config.engineVersion === "string" && config.engineVersion ? config.engineVersion : "dev";
         const riskApiUrl = config && typeof config.riskApiUrl === "string" ? config.riskApiUrl : "";
@@ -14635,7 +14664,8 @@ function buildHandler(config) {
                 from: intentArg.vault,
                 to: intentArg.to,
                 data: intentArg.data,
-                value: (_j = intentArg.value) !== null && _j !== void 0 ? _j : "0"
+                value: (_j = intentArg.value) !== null && _j !== void 0 ? _j : "0",
+                expectedTokenBalanceDeltas: intentArg.expectedTokenBalanceDeltas
             };
             const bodyBytes = new TextEncoder().encode(JSON.stringify(payloadBody));
             const resp = sendRequester.sendRequest({

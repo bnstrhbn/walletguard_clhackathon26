@@ -199,6 +199,9 @@ export const ToolRunResponseSchema = z.object({
 
 export const VaultExecutionModeSchema = z.enum(['AUTO_EXECUTE', 'PROPOSE_ONLY']);
 
+const signedDecimalString = z.string().max(MAX_DECIMAL_STR_CHARS).regex(/^-?[0-9]+$/);
+const unsignedDecimalString = z.string().max(MAX_DECIMAL_STR_CHARS).regex(/^[0-9]+$/);
+
 export const VaultIntentSchema = z.object({
   chainId: z.number().int().positive(),
   vault: addressString,
@@ -208,6 +211,16 @@ export const VaultIntentSchema = z.object({
     .string()
     .max(MAX_DECIMAL_STR_CHARS)
     .regex(/^[0-9]+$/)
+    .optional(),
+  expectedTokenBalanceDeltas: z
+    .array(
+      z.object({
+        token: addressString,
+        holder: addressString,
+        delta: signedDecimalString,
+        tolerance: unsignedDecimalString.optional(),
+      }),
+    )
     .optional(),
   requestId: z.string().min(1).max(MAX_METADATA_STR_CHARS),
   mode: VaultExecutionModeSchema,

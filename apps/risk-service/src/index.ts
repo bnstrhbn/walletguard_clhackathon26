@@ -15,12 +15,43 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeHexTopic(topic: string | undefined): string | undefined {
+  if (!topic || typeof topic !== 'string') return undefined;
+  const t = topic.toLowerCase();
+  if (!t.startsWith('0x')) return undefined;
+  return t;
+}
+
+function addressFromTopic(topic: string | undefined): string | undefined {
+  const t = normalizeHexTopic(topic);
+  if (!t) return undefined;
+  if (t.length !== 66) return undefined;
+  return `0x${t.slice(26)}`;
+}
+
+function uint256FromHexData(data: string | undefined): bigint | undefined {
+  if (!data || typeof data !== 'string') return undefined;
+  const d = data.toLowerCase();
+  if (!d.startsWith('0x')) return undefined;
+  try {
+    return BigInt(d);
+  } catch {
+    return undefined;
+  }
+}
+
 type RiskRequest = {
   chainId?: number;
   from?: string;
   to?: string;
   data?: string;
   value?: string;
+  expectedTokenBalanceDeltas?: Array<{
+    token: string;
+    holder: string;
+    delta: string;
+    tolerance?: string;
+  }>;
 };
 
 type AlchemyRpcError = {
@@ -44,10 +75,15 @@ type AlchemySimCall = {
 };
 
 type AlchemySimLog = {
-  address?: string;
-  topics?: string[];
-  data?: string;
-  decoded?: AlchemySimDecoded;
+  address: string;
+  topics: string[];
+  data: string;
+};
+
+type SimLog = {
+  address: string;
+  topics: string[];
+  data: string;
 };
 
 type AlchemySimResult = {
@@ -63,6 +99,8 @@ type SimSummary = {
   revertReason?: string;
   errorMessage?: string;
   source?: 'alchemy' | 'tenderly:rest' | 'tenderly:rpc';
+  logs?: SimLog[];
+  traceCalls?: Array<{ from: string; to: string; callType?: string; valueWei?: bigint; depth: number }>;
 };
 
 const debugTenderly = (() => {
@@ -112,12 +150,26 @@ const simCache = new Map<
 >();
 
 function cacheKey(body: RiskRequest): string {
+  const expected = Array.isArray(body.expectedTokenBalanceDeltas)
+    ? [...body.expectedTokenBalanceDeltas]
+        .map((e) => {
+          const token = String(e?.token ?? '').toLowerCase();
+          const holder = String(e?.holder ?? '').toLowerCase();
+          const delta = String(e?.delta ?? '0');
+          const tolerance = e?.tolerance === undefined ? '' : String(e.tolerance);
+          return `${token}:${holder}:${delta}:${tolerance}`;
+        })
+        .sort()
+        .join(',')
+    : '';
+
   return [
     String(body.chainId ?? ''),
     String(body.from ?? '').toLowerCase(),
     String(body.to ?? '').toLowerCase(),
     String(body.value ?? '0'),
     String(body.data ?? '').toLowerCase(),
+    expected,
   ].join('|');
 }
 
@@ -396,6 +448,7 @@ function simSummaryFromAlchemy(sim: AlchemySimResult): SimSummary {
     revertReason: typeof sim.revertReason === 'string' ? sim.revertReason : undefined,
     errorMessage: typeof sim.error === 'string' ? sim.error : undefined,
     source: 'alchemy',
+    logs: (sim.logs ?? []).filter((l) => l && typeof l.address === 'string' && Array.isArray(l.topics) && typeof l.data === 'string'),
   };
 }
 
@@ -404,6 +457,8 @@ function extractSimSummaryDeep(input: unknown): SimSummary {
   let totalGasUsed = 0n;
   let revertReason: string | undefined;
   let errorMessage: string | undefined;
+  const logs: SimLog[] = [];
+  const traceCalls: Array<{ from: string; to: string; callType?: string; valueWei?: bigint; depth: number }> = [];
 
   const seen = new Set<unknown>();
   const queue: Array<{ v: unknown; depth: number }> = [{ v: input, depth: 0 }];
@@ -421,6 +476,72 @@ function extractSimSummaryDeep(input: unknown): SimSummary {
 
     const obj = v as Record<string, unknown>;
 
+    const fromLike = (() => {
+      const cand =
+        (typeof obj.from === 'string' && obj.from) ||
+        (typeof obj.caller === 'string' && obj.caller) ||
+        (typeof (obj as { caller_address?: unknown }).caller_address === 'string' && (obj as { caller_address: string }).caller_address) ||
+        (typeof (obj as { callerAddress?: unknown }).callerAddress === 'string' && (obj as { callerAddress: string }).callerAddress);
+      const s = typeof cand === 'string' ? cand.toLowerCase() : '';
+      return /^0x[0-9a-f]{40}$/.test(s) ? s : undefined;
+    })();
+
+    const toLike = (() => {
+      const cand =
+        (typeof obj.to === 'string' && obj.to) ||
+        (typeof obj.callee === 'string' && obj.callee) ||
+        (typeof (obj as { callee_address?: unknown }).callee_address === 'string' && (obj as { callee_address: string }).callee_address) ||
+        (typeof (obj as { calleeAddress?: unknown }).calleeAddress === 'string' && (obj as { calleeAddress: string }).calleeAddress) ||
+        (typeof (obj as { contract_address?: unknown }).contract_address === 'string' &&
+          (obj as { contract_address: string }).contract_address) ||
+        (typeof (obj as { contractAddress?: unknown }).contractAddress === 'string' && (obj as { contractAddress: string }).contractAddress);
+      const s = typeof cand === 'string' ? cand.toLowerCase() : '';
+      return /^0x[0-9a-f]{40}$/.test(s) ? s : undefined;
+    })();
+
+    const callTypeLike = (() => {
+      const cand =
+        (typeof (obj as { call_type?: unknown }).call_type === 'string' && (obj as { call_type: string }).call_type) ||
+        (typeof (obj as { callType?: unknown }).callType === 'string' && (obj as { callType: string }).callType) ||
+        (typeof obj.type === 'string' && obj.type);
+      const s = typeof cand === 'string' ? cand.toUpperCase() : undefined;
+      return s;
+    })();
+
+    const valueWeiLike = (() => {
+      const cand =
+        obj.value ??
+        (obj as { value_wei?: unknown }).value_wei ??
+        (obj as { valueWei?: unknown }).valueWei;
+      if (typeof cand === 'string') {
+        const s = cand.toLowerCase();
+        if (s.startsWith('0x')) {
+          try {
+            return BigInt(s);
+          } catch {
+            return undefined;
+          }
+        }
+        if (/^[0-9]+$/.test(s)) {
+          try {
+            return BigInt(s);
+          } catch {
+            return undefined;
+          }
+        }
+      }
+      if (typeof cand === 'number' && Number.isFinite(cand) && cand >= 0) {
+        return BigInt(Math.floor(cand));
+      }
+      return undefined;
+    })();
+
+    if (fromLike && toLike && traceCalls.length < 400) {
+      if (callTypeLike && ['CALL', 'DELEGATECALL', 'STATICCALL', 'CALLCODE', 'CREATE', 'CREATE2'].includes(callTypeLike)) {
+        traceCalls.push({ from: fromLike, to: toLike, callType: callTypeLike, valueWei: valueWeiLike, depth });
+      }
+    }
+
     for (const [k, val] of Object.entries(obj)) {
       const key = k.toLowerCase();
 
@@ -430,6 +551,21 @@ function extractSimSummaryDeep(input: unknown): SimSummary {
         val.length > 0
       ) {
         decodedMethods.add(val);
+      }
+
+      if (key === 'logs' && Array.isArray(val) && logs.length < 200) {
+        for (const it of val) {
+          if (!it || typeof it !== 'object') continue;
+          const lo = it as Record<string, unknown>;
+          const address = typeof lo.address === 'string' ? lo.address.toLowerCase() : '';
+          const topics = Array.isArray(lo.topics) ? lo.topics.filter((t) => typeof t === 'string') : [];
+          const data = typeof lo.data === 'string' ? lo.data.toLowerCase() : '';
+          if (!/^0x[0-9a-f]{40}$/.test(address)) continue;
+          if (!data.startsWith('0x')) continue;
+          if (topics.length === 0) continue;
+          logs.push({ address, topics: topics.map((t) => t.toLowerCase()), data });
+          if (logs.length >= 200) break;
+        }
       }
 
       if ((key === 'revertreason' || key === 'revert_reason') && typeof val === 'string' && val.length > 0) {
@@ -463,6 +599,8 @@ function extractSimSummaryDeep(input: unknown): SimSummary {
     totalGasUsed,
     revertReason,
     errorMessage,
+    logs: logs.length > 0 ? logs : undefined,
+    traceCalls: traceCalls.length > 0 ? traceCalls : undefined,
   };
 }
 
@@ -518,7 +656,7 @@ async function tenderlySimulateExecution(input: {
       gas: 1_000_000,
       gas_price: 0,
       value: valueNum,
-      simulation_type: 'quick',
+      simulation_type: 'full',
     };
 
     const candidates: Array<Record<string, unknown>> = [];
@@ -712,6 +850,8 @@ async function tenderlySimulateExecution(input: {
 function riskFromSimSummary(input: {
   provider: 'alchemy' | 'tenderly';
   summary: SimSummary;
+  txFrom: string;
+  request: RiskRequest;
   heuristic: { riskScore: number; flags: string[]; reason: string };
 }): { riskScore: number; flags: string[]; reason: string } {
   const flags = new Set<string>(input.heuristic.flags);
@@ -731,12 +871,134 @@ function riskFromSimSummary(input: {
   if (input.summary.revertReason) flags.add('SIM_REVERT');
   if (input.summary.errorMessage && input.summary.errorMessage.length > 0) flags.add('SIM_ERROR');
 
+  const allowlist = readAllowedAddresses();
+  const txFromLower = input.txFrom.toLowerCase();
+
+  const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+  const APPROVAL_TOPIC = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925';
+
+  const tokenDelta = new Map<string, bigint>();
+  function addDelta(token: string, holder: string, delta: bigint) {
+    const k = `${token.toLowerCase()}|${holder.toLowerCase()}`;
+    tokenDelta.set(k, (tokenDelta.get(k) ?? 0n) + delta);
+  }
+
+  if (Array.isArray(input.summary.logs)) {
+    for (const l of input.summary.logs) {
+      const t0 = normalizeHexTopic(l.topics?.[0]);
+      if (!t0) continue;
+
+      if (t0 === TRANSFER_TOPIC) {
+        const from = addressFromTopic(l.topics?.[1]);
+        const to = addressFromTopic(l.topics?.[2]);
+        const amount = uint256FromHexData(l.data) ?? 0n;
+
+        if (from) addDelta(l.address, from, -amount);
+        if (to) addDelta(l.address, to, amount);
+
+        if (from && from.toLowerCase() === txFromLower) {
+          flags.add('SIM_TOKEN_OUTFLOW');
+          if (allowlist.size > 0 && to && !allowlist.has(to.toLowerCase())) {
+            flags.add('RECIPIENT_NOT_ALLOWLISTED');
+          }
+        }
+      }
+
+      if (t0 === APPROVAL_TOPIC) {
+        const owner = addressFromTopic(l.topics?.[1]);
+        const spender = addressFromTopic(l.topics?.[2]);
+        if (owner && owner.toLowerCase() === txFromLower) {
+          flags.add('SIM_APPROVAL');
+          const amount = uint256FromHexData(l.data);
+          if (amount === (2n ** 256n - 1n)) flags.add('MAX_APPROVAL');
+          if (allowlist.size > 0 && spender && !allowlist.has(spender.toLowerCase())) {
+            flags.add('SPENDER_NOT_ALLOWLISTED');
+          }
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(input.request.expectedTokenBalanceDeltas) && input.request.expectedTokenBalanceDeltas.length > 0) {
+    let mismatch = false;
+    let unavailable = false;
+
+    for (const exp of input.request.expectedTokenBalanceDeltas) {
+      const token = typeof exp?.token === 'string' ? exp.token.toLowerCase() : '';
+      const holder = typeof exp?.holder === 'string' ? exp.holder.toLowerCase() : '';
+      if (!/^0x[0-9a-f]{40}$/.test(token) || !/^0x[0-9a-f]{40}$/.test(holder)) {
+        unavailable = true;
+        continue;
+      }
+
+      let expected: bigint;
+      try {
+        expected = BigInt(String(exp.delta ?? '0'));
+      } catch {
+        unavailable = true;
+        continue;
+      }
+
+      let tolerance = 0n;
+      try {
+        if (exp.tolerance !== undefined) tolerance = BigInt(String(exp.tolerance));
+      } catch {
+        tolerance = 0n;
+      }
+
+      const key = `${token}|${holder}`;
+      const observed = tokenDelta.get(key) ?? 0n;
+      if (!tokenDelta.has(key) && expected !== 0n) unavailable = true;
+
+      const diff = observed >= expected ? observed - expected : expected - observed;
+      if (diff > tolerance) mismatch = true;
+    }
+
+    if (mismatch) flags.add('EXPECTED_TOKEN_DELTA_MISMATCH');
+    else if (unavailable) flags.add('EXPECTED_TOKEN_DELTA_UNAVAILABLE');
+  }
+
+  if (Array.isArray(input.summary.traceCalls)) {
+    for (const c of input.summary.traceCalls) {
+      const to = c.to.toLowerCase();
+      const depth = c.depth ?? 0;
+      const valueWei = c.valueWei ?? 0n;
+
+      if (c.callType === 'DELEGATECALL' || c.callType === 'CALLCODE') flags.add('SIM_DELEGATECALL_PATH');
+
+      if (depth > 0 && to === txFromLower) flags.add('SIM_REENTRANCY');
+
+      if (depth > 0 && valueWei > 0n) {
+        flags.add('SIM_INTERNAL_VALUE_TRANSFER');
+        if (allowlist.size > 0 && /^0x[0-9a-f]{40}$/.test(to) && !allowlist.has(to)) {
+          flags.add('SIM_INTERNAL_VALUE_TRANSFER_NOT_ALLOWLISTED');
+        }
+      }
+
+      if (allowlist.size > 0 && depth > 0 && /^0x[0-9a-f]{40}$/.test(to) && !allowlist.has(to)) {
+        flags.add('SIM_INTERNAL_TARGET_NOT_ALLOWLISTED');
+      }
+    }
+  }
+
   let simScore = 0;
   if (flags.has('SIM_DECODE_APPROVE') || flags.has('SIM_DECODE_SET_APPROVAL_FOR_ALL')) simScore = 70;
+  else if (flags.has('EXPECTED_TOKEN_DELTA_MISMATCH')) simScore = 85;
+  else if (flags.has('SIM_DELEGATECALL_PATH') || flags.has('SIM_INTERNAL_VALUE_TRANSFER_NOT_ALLOWLISTED')) simScore = 95;
+  else if (flags.has('SIM_REENTRANCY')) simScore = 85;
+  else if (flags.has('SIM_ERROR') || flags.has('SIM_REVERT')) simScore = 85;
+  else if (flags.has('SIM_INTERNAL_TARGET_NOT_ALLOWLISTED')) simScore = 40;
   else if (flags.has('SIM_HIGH_GAS')) simScore = 40;
+  else if (flags.has('SIM_TOKEN_OUTFLOW')) simScore = 40;
   else simScore = 10;
 
-  const riskScore = Math.max(input.heuristic.riskScore, simScore);
+  let riskScore = Math.max(input.heuristic.riskScore, simScore);
+  if (flags.has('TARGET_NOT_ALLOWLISTED') || flags.has('RECIPIENT_NOT_ALLOWLISTED') || flags.has('SPENDER_NOT_ALLOWLISTED')) {
+    riskScore = Math.max(riskScore, 95);
+  }
+  if (flags.has('MAX_APPROVAL')) riskScore = Math.max(riskScore, 85);
+  if (flags.has('UNKNOWN_SELECTOR')) riskScore = Math.max(riskScore, 85);
+  if (flags.has('EXPECTED_TOKEN_DELTA_UNAVAILABLE')) riskScore = Math.max(riskScore, 60);
 
   const providerLabel =
     input.summary.source === 'tenderly:rest'
@@ -769,10 +1031,12 @@ function riskFromSimSummary(input: {
 
 function riskFromAlchemySimulation(input: {
   sim: AlchemySimResult;
+  txFrom: string;
+  request: RiskRequest;
   heuristic: { riskScore: number; flags: string[]; reason: string };
 }): { riskScore: number; flags: string[]; reason: string } {
   const summary = simSummaryFromAlchemy(input.sim);
-  return riskFromSimSummary({ provider: 'alchemy', summary, heuristic: input.heuristic });
+  return riskFromSimSummary({ provider: 'alchemy', summary, txFrom: input.txFrom, request: input.request, heuristic: input.heuristic });
 }
 
 app.post('/risk/tx', async (req: Request, res: Response) => {
@@ -847,7 +1111,7 @@ app.post('/risk/tx', async (req: Request, res: Response) => {
         value: body.value,
       });
 
-      const out = riskFromSimSummary({ provider: 'tenderly', summary, heuristic });
+      const out = riskFromSimSummary({ provider: 'tenderly', summary, txFrom: body.from as string, request: body, heuristic });
       tenderlyLog('primary_used', {
         source: summary.source ?? null,
         riskScore: out.riskScore,
@@ -888,7 +1152,7 @@ app.post('/risk/tx', async (req: Request, res: Response) => {
     }
 
     if (sim) {
-      const out = riskFromAlchemySimulation({ sim, heuristic });
+      const out = riskFromAlchemySimulation({ sim, txFrom: body.from as string, request: body, heuristic });
       tenderlyLog('fallback_used', {
         provider: 'alchemy',
         riskScore: out.riskScore,

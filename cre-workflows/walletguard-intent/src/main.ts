@@ -151,6 +151,16 @@ function buildHandler(config: Config) {
       to: parsedIntent.to.toLowerCase() as VaultIntent['to'],
       data: parsedIntent.data.toLowerCase() as VaultIntent['data'],
       value: (parsedIntent.value ?? '0').toString(),
+      expectedTokenBalanceDeltas: Array.isArray(parsedIntent.expectedTokenBalanceDeltas)
+        ? parsedIntent.expectedTokenBalanceDeltas.map((e) => {
+            return {
+              token: e.token.toLowerCase() as VaultIntent['vault'],
+              holder: e.holder.toLowerCase() as VaultIntent['vault'],
+              delta: String(e.delta),
+              tolerance: e.tolerance === undefined ? undefined : String(e.tolerance),
+            };
+          })
+        : undefined,
     };
 
     const engineVersion = config && typeof config.engineVersion === 'string' && config.engineVersion
@@ -191,6 +201,7 @@ function buildHandler(config: Config) {
         to: intentArg.to,
         data: intentArg.data,
         value: intentArg.value ?? '0',
+        expectedTokenBalanceDeltas: intentArg.expectedTokenBalanceDeltas,
       };
 
       const bodyBytes = new TextEncoder().encode(JSON.stringify(payloadBody));

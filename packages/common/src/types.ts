@@ -3,12 +3,20 @@ export type AddressString = `0x${string}`;
 
 export type VaultExecutionMode = 'AUTO_EXECUTE' | 'PROPOSE_ONLY';
 
+export type ExpectedTokenBalanceDelta = {
+  token: AddressString;
+  holder: AddressString;
+  delta: string;
+  tolerance?: string;
+};
+
 export type VaultIntent = {
   chainId: number;
   vault: AddressString;
   to: AddressString;
   data: HexString;
   value?: string;
+  expectedTokenBalanceDeltas?: ExpectedTokenBalanceDelta[];
   requestId: string;
   mode: VaultExecutionMode;
   metadata?: {

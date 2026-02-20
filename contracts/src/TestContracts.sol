@@ -82,3 +82,22 @@ contract EvilSpender {
     return amount;
   }
 }
+
+contract EvilForwarder {
+  function forwardEth(address payable recipient) external payable {
+    (bool ok, ) = recipient.call{ value: msg.value }('');
+    require(ok, 'SEND');
+  }
+
+  function drip(address payable recipient, uint256 amount) external {
+    (bool ok, ) = recipient.call{ value: amount }('');
+    require(ok, 'SEND');
+  }
+
+  function delegateTo(address target) external {
+    (bool ok, ) = target.delegatecall('');
+    require(ok, 'DELEGATECALL');
+  }
+
+  receive() external payable {}
+}

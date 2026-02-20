@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import solc from 'solc';
-import { createPublicClient, createWalletClient, defineChain, http } from 'viem';
+import { createPublicClient, createWalletClient, defineChain, http, parseEther } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 function compileTestContracts() {
@@ -51,6 +51,7 @@ function compileTestContracts() {
   return {
     testErc20: pick('TestERC20'),
     evilSpender: pick('EvilSpender'),
+    evilForwarder: pick('EvilForwarder'),
   };
 }
 
@@ -92,7 +93,7 @@ async function main() {
     transport: http(rpcUrl),
   });
 
-  const { testErc20, evilSpender } = compileTestContracts();
+  const { testErc20, evilSpender, evilForwarder } = compileTestContracts();
 
   const tokenHash = await walletClient.deployContract({
     abi: testErc20.abi,
@@ -110,12 +111,27 @@ async function main() {
   const evilReceipt = await publicClient.waitForTransactionReceipt({ hash: evilHash });
   if (!evilReceipt.contractAddress) throw new Error('EvilSpender deploy missing contractAddress');
 
+  const forwarderHash = await walletClient.deployContract({
+    abi: evilForwarder.abi,
+    bytecode: evilForwarder.bytecode,
+    args: [],
+  });
+  const forwarderReceipt = await publicClient.waitForTransactionReceipt({ hash: forwarderHash });
+  if (!forwarderReceipt.contractAddress) throw new Error('EvilForwarder deploy missing contractAddress');
+
+  const fundHash = await walletClient.sendTransaction({
+    to: forwarderReceipt.contractAddress,
+    value: parseEther('0.01'),
+  });
+  await publicClient.waitForTransactionReceipt({ hash: fundHash });
+
   process.stdout.write(
     JSON.stringify(
       {
         chainId,
         testErc20: tokenReceipt.contractAddress,
         evilSpender: evilReceipt.contractAddress,
+        evilForwarder: forwarderReceipt.contractAddress,
       },
       null,
       2,

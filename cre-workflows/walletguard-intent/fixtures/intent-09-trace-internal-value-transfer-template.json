@@ -1,0 +1,12 @@
+{
+  "chainId": 11155111,
+  "vault": "0x6a9e197c0e63527c8fd2217d2f6479713671cee4",
+  "to": "0x63bff90625d1f349e38b491a3f379e2f1522cbe3",
+  "data": "0x9e353a1e00000000000000000000000090077d0d828f177e0fe7405ea3f3b381321086480000000000000000000000000000000000000000000000000000000000000001",
+  "value": "0",
+  "requestId": "demo-trace-internal-value-transfer-not-allowlisted-1",
+  "mode": "AUTO_EXECUTE",
+  "metadata": {
+    "origin": "workshop"
+  }
+}
