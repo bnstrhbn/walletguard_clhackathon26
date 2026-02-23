@@ -1,0 +1,10 @@
+{
+  "engineVersion": "dev",
+  "chainId": 11155111,
+  "chainSelectorName": "ethereum-testnet-sepolia",
+  "registryAddress": "",
+  "receiverAddress": "",
+  "riskApiUrl": "",
+  "secretOwner": "",
+  "gasLimit": "900000"
+}
