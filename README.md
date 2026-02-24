@@ -1,29 +1,101 @@
 # WalletGuard (Chainlink Convergence Hackathon 2026)
 
+Video explainer: https://youtu.be/ZxlSbMzT21Q
+
 ## Executive summary
 
 WalletGuard is an **agent-friendly transaction firewall** built on **Chainlink CRE**.
 
-It runs transaction analysis inside a **CRE workflow** (Confidential Compute) and produces a deterministic **receipt hash** that can be used to:
+It’s designed for a world where agents can be prompt-injected and may unknowingly propose transactions that interact with malicious contracts (phishing routers, approval drains, stealth delegatecalls, internal value leaks).
 
-- **[gate execution]** A vault only executes transactions that match an approved intent/receipt.
-- **[prevent replay]** The vault rejects previously used receipt hashes.
-- **[explain risk]** The workflow returns a human-/agent-readable decision with flags and reasons.
+WalletGuard separates planning from execution:
+
+- **[Agent proposes intents]** Agents propose *what they want to do*, but do not hold the treasury keys.
+- **[CRE evaluates]** A CRE workflow evaluates the intent using deterministic checks + simulation signals (Alchemy + Tenderly).
+- **[Receipt + decision]** The workflow produces a deterministic receipt hash and a clear decision: `allow` / `warn` / `block`.
+- **[Vault gates execution]** A vault only executes transactions that match an approved receipt, and rejects replays of previously used receipt hashes.
 
 This repo includes:
 
-- **[CRE workflows]** `walletguard-intent` (intent -> risk -> receipt) and `walletguard-analyze` (report-style analysis).
-- **[Risk engine service]** `apps/risk-service` (Tenderly/Alchemy simulation + heuristics).
-- **[Optional API]** `apps/api` (HTTP endpoints to analyze an intent and execute via a demo executor key).
-- **[Contracts]** `WalletGuardVault` and `ReportRegistry` + deployable test contracts.
+- **[CRE workflows]**
+  - `walletguard-intent` (intent -> risk -> receipt)
+  - `walletguard-analyze` (report-style analysis)
+  - `walletguard-watcher` (Sepolia watcher: `IntentRegistry` -> risk -> `Receiver` -> optional vault execution)
+- **[Risk engine service]** `apps/risk-service` (Tenderly/Alchemy simulation + heuristics)
+- **[Optional API]** `apps/api` (HTTP endpoints to analyze an intent and execute via a demo executor key)
+- **[Contracts]** `WalletGuardVault`, `ReportRegistry`, `IntentRegistry`, `WalletGuardWatcherReceiver` + deployable test contracts
+
+### What it protects against
+
+WalletGuard is built to reduce the risk of agents interacting with malicious contracts by:
+
+- enforcing allowlisted targets/selectors at the vault layer
+- flagging risky patterns like max approvals, untrusted spenders/recipients, unknown selectors, and hidden internal behaviors visible only in simulation traces
+- making execution conditional on receipt-based approval
+
+### Core outputs
+
+Each run returns:
+
+- **[Decision]** `allow` / `warn` / `block`
+- **[Flags + reasons]** human/agent-readable explanation of what’s risky and why
+- **[Receipt hash]** deterministic identifier that can be enforced onchain to gate execution and prevent replay
+
+### Agent wallet model (important)
+
+An agent still needs a wallet in this flow — for example to:
+
+- pay gas / fees
+- pay per-call for services in the future (x402)
+- sign non-treasury actions
+
+But the agent wallet should only hold small operational balances, not large funds. Large funds live in the Vault, which enforces policy and execution constraints.
+
+### Roadmap (what comes next)
+
+#### x402: pay-per-check and agent-to-service payments
+
+We plan to add x402 as a clean paywall and accounting mechanism:
+
+- agents can pay for WalletGuard analysis/execution requests per call
+- or pay for premium risk checks / simulators
+- with optional vault reimbursement based on verifiable receipts
+
+#### More DeFi coverage via typed intent formats
+
+Today’s MVP supports a single-call “transaction intent” (`to`/`value`/`data`). Next, we expand with typed intents where the workflow builds calldata safely from parameters:
+
+- `ApproveIntent` (exact/capped approvals, no infinite approvals by default)
+- `SwapIntent` (allowlisted routers, slippage caps, deadlines, expected deltas)
+- `DepositIntent` / `WithdrawIntent` (lending pools, vaults)
+- `ClaimIntent` (rewards harvesting)
+- later: multi-step plans (`ApproveIfNeeded` → `Swap` → `Deposit`) and cross-chain/CCIP-style intents
+
+Each new intent type ships with matching WalletGuard checks:
+
+- semantic validation
+- simulation assertions (deltas)
+- counterparty risk checks
+
+### How we compare to agentic wallet products (Coinbase Agentic Wallet, etc.)
+
+Agentic wallet products (like Coinbase Agentic Wallet) provide a convenient wallet and guardrails for agents to spend and operate (e.g., small payments, trading, gasless UX). WalletGuard is complementary:
+
+- **[Agentic Wallet]** agent spending wallet (operational funds, convenience, payments)
+- **[WalletGuard + Vault]** secure execution and safety gate for vault funds (treasury-grade policy + simulation + onchain enforcement)
+
+In other words: agent wallets are great for “petty cash,” while WalletGuard is meant to protect large-value vault funds by making execution conditional on verifiable safety checks.
 
 ## How it works (high level)
 
-- **[Agent submits an intent]** (JSON) describing the transaction it wants the vault to execute.
+- **[Agent proposes an intent]** (JSON) describing the transaction it wants the vault to execute.
+- **[Optional onchain intent lane]** Onchain, intents can be submitted to `IntentRegistry` (emits `IntentSubmitted`).
 - **[CRE workflow runs]** and retrieves a secret `riskApiKey` via CRE secret injection.
 - **[Workflow calls risk-service]** `/risk/tx` with the transaction + optional expectations.
 - **[Workflow decides]** `allow` / `warn` / `block` and builds a deterministic `VaultReceipt`.
-- **[Vault executes]** only if the receipt is acceptable, and records `Executed(receiptHash, ...)` onchain.
+- **[Execution is gated by receipt hash]**
+  - **[Direct execute lane]** a demo executor submits `WalletGuardVault.execute(..., receiptHash)`.
+  - **[Watcher lane]** `walletguard-watcher` writes a report to `WalletGuardWatcherReceiver`, which finalizes the onchain intent and can optionally call the Vault.
 
 ## Quickstart (local demo)
 
@@ -262,6 +334,21 @@ Baselines live in `scripts/fixtures-baseline.staging-settings.json`.
 
 `contracts/src/ReportRegistry.sol`: minimal onchain anchor for report hashes.
 
+### IntentRegistry
+
+`contracts/src/IntentRegistry.sol`: onchain intent queue + status machine.
+
+- `submitIntent(...)` stores an intent and emits `IntentSubmitted(intentId, ...)`.
+- `markProcessing(intentId)` and `finalize(intentId, ...)` are executor-gated and are used by the watcher lane.
+
+### WalletGuardWatcherReceiver
+
+`contracts/src/WalletGuardWatcherReceiver.sol`: report receiver that bridges CRE -> EVM.
+
+- Only a configured forwarder can call `onReport(...)`.
+- Decodes `(registry, intentId, action, receiptHash)`.
+- Reads the onchain intent, finalizes it, and (for `AUTO_EXECUTE` + `allow`) can call `WalletGuardVault.execute(...)`.
+
 ### Deployed (Sepolia)
 
 - `WalletGuardVault`: `0x6a9e197c0e63527c8fd2217d2f6479713671cee4`
@@ -279,3 +366,17 @@ The repo includes `./cre-compile-workflow`, a shim used to compile workflow JS -
 ## Repo docs
 
 - `PROJECT_PLAN.md`: background + next steps
+
+## Diagrams
+
+### Confidential Compute (current demo lane)
+
+![Confidential Compute block diagram](blockdiagram_cre26_confidentialCompute.drawio.png)
+
+![Confidential Compute flowchart](Flowchart_CRE26_confidentialCompute.drawio.png)
+
+![Confidential Compute sequence diagram](SequenceDiagramCRE26-ConfidentialCompute.drawio.png)
+
+### Watcher + Registry lane (future)
+
+![Watcher + registries flow diagram (future)](flowdiagram_cre2026_withWatcherRegistries.drawio.png)

@@ -440,7 +440,10 @@ function simSummaryFromAlchemy(sim: AlchemySimResult): SimSummary {
     .map((c) => c.decoded?.methodName)
     .filter((m): m is string => typeof m === 'string' && m.length > 0);
 
-  const totalGasUsed = (sim.calls ?? []).reduce((acc, c) => acc + tryParseHexToBigInt(c.gasUsed), 0n);
+  const totalGasUsed = (sim.calls ?? []).reduce((acc, c) => {
+    const gasUsed = tryParseHexToBigInt(c.gasUsed);
+    return gasUsed > acc ? gasUsed : acc;
+  }, 0n);
 
   return {
     decodedMethods,
@@ -578,9 +581,11 @@ function extractSimSummaryDeep(input: unknown): SimSummary {
 
       if (key === 'gasused' || key === 'gas_used') {
         if (typeof val === 'string') {
-          totalGasUsed += tryParseHexToBigInt(val);
+          const gasUsed = tryParseHexToBigInt(val);
+          if (gasUsed > totalGasUsed) totalGasUsed = gasUsed;
         } else if (typeof val === 'number' && Number.isFinite(val) && val >= 0) {
-          totalGasUsed += BigInt(Math.floor(val));
+          const gasUsed = BigInt(Math.floor(val));
+          if (gasUsed > totalGasUsed) totalGasUsed = gasUsed;
         }
       }
 
@@ -988,7 +993,7 @@ function riskFromSimSummary(input: {
   else if (flags.has('SIM_REENTRANCY')) simScore = 85;
   else if (flags.has('SIM_ERROR') || flags.has('SIM_REVERT')) simScore = 85;
   else if (flags.has('SIM_INTERNAL_TARGET_NOT_ALLOWLISTED')) simScore = 40;
-  else if (flags.has('SIM_HIGH_GAS')) simScore = 40;
+  else if (flags.has('SIM_HIGH_GAS')) simScore = 25;
   else if (flags.has('SIM_TOKEN_OUTFLOW')) simScore = 40;
   else simScore = 10;
 
