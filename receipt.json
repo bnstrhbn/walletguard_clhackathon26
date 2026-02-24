@@ -1,0 +1,36 @@
+{
+  "decision": {
+    "action": "allow",
+    "mode": "AUTO_EXECUTE",
+    "risk": {
+      "flags": [
+        "ERC20_TRANSFER",
+        "SIM_HIGH_GAS",
+        "TENDERLY_REST",
+        "TENDERLY_SIMULATED"
+      ],
+      "reason": "tenderly:rest:method:transfer",
+      "riskScore": 25
+    }
+  },
+  "hashes": {
+    "decisionHash": "0x78b8041507dd4df7593fdcb7bb49b5ad399667d831bdd2ca8e7f74e250e31449",
+    "intentHash": "0xcef136bf4639884481bd7eb13998204ae0740dfaecd64e442225cc147cc86af8",
+    "receiptHash": "0x3ba89357186d4d65f1c0020054ca77c75f53c0ba18448b1f2e96d02e15272ac7"
+  },
+  "intent": {
+    "chainId": 11155111,
+    "data": "0xa9059cbb000000000000000000000000a4c52d77257e436ffece9219b2f90c559236eed40000000000000000000000000000000000000000000000000de0b6b3a7640000",
+    "metadata": {
+      "origin": "workshop"
+    },
+    "mode": "AUTO_EXECUTE",
+    "requestId": "CRE_demo",
+    "to": "0x779877a7b0d9e8603169ddbd7836e478b4624789",
+    "value": "0",
+    "vault": "0x6a9e197c0e63527c8fd2217d2f6479713671cee4"
+  },
+  "provenance": {
+    "engineVersion": "dev"
+  }
+}
