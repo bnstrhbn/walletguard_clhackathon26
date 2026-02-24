@@ -370,13 +370,15 @@ The repo includes `./cre-compile-workflow`, a shim used to compile workflow JS -
 ## Diagrams
 
 ### Confidential Compute (current demo lane)
-
+Block Diagram:
 ![Confidential Compute block diagram](blockdiagram_cre26_confidentialCompute.drawio.png)
 
+Flow Diagram:
 ![Confidential Compute flowchart](Flowchart_CRE26_confidentialCompute.drawio.png)
 
+Sequence Diagram:
 ![Confidential Compute sequence diagram](SequenceDiagramCRE26-ConfidentialCompute.drawio.png)
 
 ### Watcher + Registry lane (future)
-
+Flow Diagram:
 ![Watcher + registries flow diagram (future)](flowdiagram_cre2026_withWatcherRegistries.drawio.png)
