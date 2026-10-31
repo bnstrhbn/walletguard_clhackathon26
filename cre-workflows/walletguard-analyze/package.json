@@ -15,7 +15,7 @@
     "@chainlink/cre-sdk": "^1.0.7",
     "@walletguard/common": "workspace:*",
     "@walletguard/walletguard-core": "workspace:*",
-    "zod": "^3.22.4"
+    "zod": "^4.6.6"
   },
   "devDependencies": {}
 }
